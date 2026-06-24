@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.pytest-tmp/
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+streamlit-smoke.*
+*.db
+*.sqlite
+*.sqlite3
+.venv/
+venv/
