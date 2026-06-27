@@ -8,6 +8,7 @@ import streamlit as st
 import emailer
 import storage
 from config import get_settings
+from dashboard_editor import build_dashboard_editor_rows, dashboard_quote_updates
 from message_generator import (
     generate_ai_follow_up_message,
     generate_follow_up_message,
@@ -103,51 +104,31 @@ def dashboard() -> None:
     if not ranked:
         st.info("No quotes yet.")
     else:
-        rows = [
-            {
-                "ID": q["id"],
-                "Customer": q["customer_name"],
-                "Email": q["customer_email"],
-                "Phone": q["customer_phone"],
-                "Service": q["service_type"],
-                "Amount": float(q["quote_amount"]),
-                "Due": q["follow_up_due_date"],
-                "Status": normalize_status(q["status"]),
-                "Source": q["source"],
-                "Score": calculate_recovery_score(q),
-                "Next action": suggest_next_action(q),
-            }
-            for q in ranked
-        ]
+        rows = build_dashboard_editor_rows(ranked)
         edited = st.data_editor(
             rows,
             use_container_width=True,
             hide_index=True,
-            disabled=["ID", "Score", "Next action"],
+            disabled=["Score", "Next action"],
             column_config={
-                "ID": st.column_config.NumberColumn("ID", disabled=True),
+                "_quote_id": None,
+                "Customer": st.column_config.TextColumn("Customer"),
+                "Email": st.column_config.TextColumn("Email"),
+                "Phone": st.column_config.TextColumn("Phone"),
+                "Service": st.column_config.TextColumn("Service"),
                 "Amount": st.column_config.NumberColumn("Amount", min_value=0.0, format="$%.2f"),
-                "Due": st.column_config.DateColumn("Follow-up due", format="YYYY-MM-DD"),
+                "Due": st.column_config.TextColumn("Follow-up due (YYYY-MM-DD)"),
                 "Status": st.column_config.SelectboxColumn("Status", options=list(STATUSES), required=True),
-                "Score": st.column_config.NumberColumn("Score", disabled=True),
+                "Source": st.column_config.TextColumn("Source"),
+                "Score": st.column_config.TextColumn("Score", disabled=True),
                 "Next action": st.column_config.TextColumn("Next action", disabled=True),
             },
             key="dashboard_quote_editor",
         )
         if st.button("Save dashboard edits", type="primary"):
             for row in edited:
-                due = row["Due"].isoformat() if hasattr(row["Due"], "isoformat") else str(row["Due"])
-                storage.update_quote(
-                    int(row["ID"]),
-                    customer_name=str(row["Customer"]).strip() or "Unnamed Customer",
-                    customer_email=str(row["Email"]).strip(),
-                    customer_phone=str(row["Phone"] or "").strip(),
-                    service_type=str(row["Service"]).strip(),
-                    quote_amount=float(row["Amount"]),
-                    follow_up_due_date=due,
-                    status=str(row["Status"]),
-                    source=str(row["Source"] or "").strip(),
-                )
+                quote_id, updates = dashboard_quote_updates(row)
+                storage.update_quote(quote_id, **updates)
             st.success("Dashboard edits saved.")
             st.rerun()
 
