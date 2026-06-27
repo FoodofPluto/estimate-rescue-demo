@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from datetime import date
-from string import Template
-
 import streamlit as st
 
 import emailer
 import storage
 from config import get_settings
-from message_generator import generate_ai_follow_up_message, generate_follow_up_message, template_values
+from message_generator import (
+    generate_ai_follow_up_message,
+    generate_follow_up_message,
+    render_saved_template,
+    response_link_for_quote,
+)
 from quote_logic import (
     STATUSES,
     calculate_recovery_score,
@@ -23,7 +26,6 @@ from quote_logic import (
 
 st.set_page_config(page_title="Estimate Rescue", page_icon="ER", layout="wide")
 storage.init_db()
-storage.seed_demo_data_if_empty()
 
 
 def locked() -> bool:
@@ -97,23 +99,57 @@ def dashboard() -> None:
     cols[5].metric("Lost value", format_currency(metrics["lost_quote_value"]))
 
     st.subheader("Highest recovery score opportunities")
-    ranked = sorted(storage.list_quotes(), key=calculate_recovery_score, reverse=True)[:5]
-    st.dataframe(
-        [
+    ranked = sorted(storage.list_dashboard_quotes(), key=calculate_recovery_score, reverse=True)[:5]
+    if not ranked:
+        st.info("No quotes yet.")
+    else:
+        rows = [
             {
+                "ID": q["id"],
                 "Customer": q["customer_name"],
+                "Email": q["customer_email"],
+                "Phone": q["customer_phone"],
                 "Service": q["service_type"],
-                "Amount": format_currency(q["quote_amount"]),
+                "Amount": float(q["quote_amount"]),
                 "Due": q["follow_up_due_date"],
-                "Status": STATUSES[normalize_status(q["status"])],
+                "Status": normalize_status(q["status"]),
+                "Source": q["source"],
                 "Score": calculate_recovery_score(q),
                 "Next action": suggest_next_action(q),
             }
             for q in ranked
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+        ]
+        edited = st.data_editor(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["ID", "Score", "Next action"],
+            column_config={
+                "ID": st.column_config.NumberColumn("ID", disabled=True),
+                "Amount": st.column_config.NumberColumn("Amount", min_value=0.0, format="$%.2f"),
+                "Due": st.column_config.DateColumn("Follow-up due", format="YYYY-MM-DD"),
+                "Status": st.column_config.SelectboxColumn("Status", options=list(STATUSES), required=True),
+                "Score": st.column_config.NumberColumn("Score", disabled=True),
+                "Next action": st.column_config.TextColumn("Next action", disabled=True),
+            },
+            key="dashboard_quote_editor",
+        )
+        if st.button("Save dashboard edits", type="primary"):
+            for row in edited:
+                due = row["Due"].isoformat() if hasattr(row["Due"], "isoformat") else str(row["Due"])
+                storage.update_quote(
+                    int(row["ID"]),
+                    customer_name=str(row["Customer"]).strip() or "Unnamed Customer",
+                    customer_email=str(row["Email"]).strip(),
+                    customer_phone=str(row["Phone"] or "").strip(),
+                    service_type=str(row["Service"]).strip(),
+                    quote_amount=float(row["Amount"]),
+                    follow_up_due_date=due,
+                    status=str(row["Status"]),
+                    source=str(row["Source"] or "").strip(),
+                )
+            st.success("Dashboard edits saved.")
+            st.rerun()
 
     st.subheader("Recent activity")
     if not metrics["recent_activity"]:
@@ -201,17 +237,19 @@ def quote_detail() -> None:
         st.error("Quote not found.")
         return
 
-    st.subheader(f"{quote['customer_name']} - {quote['service_type']}")
+    customer_title = str(quote.get("customer_name") or "").strip() or "Unnamed Customer"
+    st.subheader(customer_title)
+    st.caption(f"Created {quote.get('created_at') or 'Unknown date'} · {quote['service_type']}")
     cols = st.columns(4)
     cols[0].metric("Amount", format_currency(quote["quote_amount"]))
     cols[1].metric("Status", STATUSES[normalize_status(quote["status"])])
     cols[2].metric("Follow-up due", quote["follow_up_due_date"])
     cols[3].metric("Recovery score", calculate_recovery_score(quote))
     st.write(suggest_next_action(quote))
-    response_url = ""
-    if get_settings().app_base_url and quote["public_response_token"]:
-        response_url = f"{get_settings().app_base_url.rstrip('/')}?page=Customer+Response+Page&token={quote['public_response_token']}"
-    st.caption(f"Response token: {quote['public_response_token']}")
+    token = storage.ensure_quote_response_token(quote["id"])
+    quote["public_response_token"] = token
+    response_url = response_link_for_quote(quote)
+    st.caption(f"Response token: {token}")
     if response_url:
         st.code(response_url, language="text")
 
@@ -227,11 +265,7 @@ def quote_detail() -> None:
         )
         if selected_template != "Use deterministic default":
             template = next(t for t in templates if t["template_key"] == selected_template)
-            values = template_values(quote, settings)
-            generated = {
-                "subject": Template(template["subject_template"]).safe_substitute(values),
-                "body": Template(template["body_template"]).safe_substitute(values),
-            }
+            generated = render_saved_template(template, quote, settings)
     if st.button("Try optional OpenAI version"):
         ai_message = generate_ai_follow_up_message(quote, settings, tone=tone)
         if ai_message:
@@ -313,6 +347,11 @@ def settings_page() -> None:
     if not require_login():
         return
     st.title("Settings / Message Templates")
+    st.info(
+        "Business settings supply the sender/reply-to details and template variables used by Quote Detail. "
+        "Saved templates affect a follow-up draft only when the operator selects that template in Quote Detail. "
+        "They do not change the public customer response page, optional AI drafts, or create automatic reminders."
+    )
     settings = storage.get_business_settings()
     with st.form("business_settings"):
         business_name = st.text_input("Business name", settings["business_name"])
@@ -325,6 +364,7 @@ def settings_page() -> None:
             st.success("Settings saved.")
 
     st.subheader("Templates")
+    st.caption("Use: operator-generated email drafts in Quote Detail. Saving a template does not send anything.")
     st.caption("Variables: $customer_name, $business_name, $service_type, $quote_amount, $response_link")
     templates = storage.list_message_templates()
     selected_key = st.selectbox("Template", [t["template_key"] for t in templates] or ["first_follow_up"])
@@ -347,8 +387,8 @@ def settings_page() -> None:
             "response_link": "https://example.com/respond",
         }
         st.subheader("Selected template preview")
-        st.write(Template(existing.get("subject_template", "")).safe_substitute(sample))
-        st.text(Template(existing.get("body_template", "")).safe_substitute(sample))
+        st.write(render_saved_template(existing, sample, settings)["subject"])
+        st.text(render_saved_template(existing, sample, settings)["body"])
 
 
 PAGES = {

@@ -39,6 +39,33 @@ def test_create_and_get_quote(tmp_path):
     assert quote["public_response_token"]
 
 
+def test_tokenless_quote_is_backfilled_once_and_resolves(tmp_path):
+    storage = load_storage(tmp_path)
+    quote_id = storage.create_quote(
+        "Legacy Customer", "legacy@example.com", "", "Detail", 200, "", "2026-01-01"
+    )
+    with storage.get_connection() as conn:
+        conn.execute("UPDATE quotes SET public_response_token=NULL WHERE id=?", (quote_id,))
+
+    first_token = storage.ensure_quote_response_token(quote_id)
+    second_token = storage.ensure_quote_response_token(quote_id)
+
+    assert first_token
+    assert second_token == first_token
+    assert storage.get_quote_by_token(first_token)["id"] == quote_id
+
+
+def test_init_db_backfills_legacy_tokenless_quotes(tmp_path):
+    storage = load_storage(tmp_path)
+    quote_id = storage.create_quote(
+        "Legacy Customer", "legacy@example.com", "", "Detail", 200, "", "2026-01-01"
+    )
+    with storage.get_connection() as conn:
+        conn.execute("UPDATE quotes SET public_response_token='' WHERE id=?", (quote_id,))
+    storage.init_db()
+    assert storage.get_quote(quote_id)["public_response_token"]
+
+
 def test_dashboard_metrics_and_follow_up_queue(tmp_path):
     storage = load_storage(tmp_path)
     storage.create_quote(
@@ -67,6 +94,36 @@ def test_dashboard_metrics_and_follow_up_queue(tmp_path):
     assert metrics["open_quotes"] == 1
     assert metrics["won_quote_value"] == 100
     assert len(queue) == 1
+
+
+def test_fresh_dashboard_is_empty_and_explicit_demo_rows_are_hidden(tmp_path):
+    storage = load_storage(tmp_path)
+    assert storage.list_dashboard_quotes() == []
+    assert storage.dashboard_metrics()["open_quotes"] == 0
+    storage.create_quote(
+        "Seed Customer", "seed@example.com", "", "Detail", 100, "", "2026-01-01", source="demo seed"
+    )
+    assert storage.list_dashboard_quotes() == []
+    assert storage.dashboard_metrics()["recent_activity"] == []
+
+
+def test_update_quote_does_not_modify_system_fields(tmp_path):
+    storage = load_storage(tmp_path)
+    quote_id = storage.create_quote(
+        "Customer", "customer@example.com", "", "Detail", 100, "", "2026-01-01"
+    )
+    before = storage.get_quote(quote_id)
+    storage.update_quote(
+        quote_id,
+        customer_name="Edited Customer",
+        public_response_token="unsafe-replacement",
+        created_at="unsafe-date",
+        id=999,
+    )
+    after = storage.get_quote(quote_id)
+    assert after["customer_name"] == "Edited Customer"
+    assert after["public_response_token"] == before["public_response_token"]
+    assert after["created_at"] == before["created_at"]
 
 
 def test_customer_response_updates_status_and_activity(tmp_path):

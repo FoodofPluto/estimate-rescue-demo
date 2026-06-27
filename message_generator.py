@@ -21,10 +21,13 @@ TONE_OPENERS = {
 
 
 def response_link_for_quote(quote: dict[str, Any]) -> str:
+    if quote.get("response_link"):
+        return str(quote["response_link"])
     cfg = get_settings()
     token = quote.get("public_response_token")
-    if cfg.app_base_url and token:
-        return f"{cfg.app_base_url.rstrip('/')}/?page=Customer+Response+Page&token={token}"
+    if token:
+        base_url = cfg.app_base_url.rstrip("/") if cfg.app_base_url else ""
+        return f"{base_url}/?page=Customer+Response+Page&token={token}"
     return ""
 
 
@@ -41,6 +44,17 @@ def template_values(quote: dict[str, Any], business_settings: dict[str, Any]) ->
 
 def _render_template(text: str, values: dict[str, str]) -> str:
     return Template(text).safe_substitute(values)
+
+
+def render_saved_template(
+    template: dict[str, Any], quote: dict[str, Any], business_settings: dict[str, Any]
+) -> dict[str, str]:
+    """Render a persisted operator template for a Quote Detail draft."""
+    values = template_values(quote, business_settings)
+    return {
+        "subject": _render_template(str(template.get("subject_template") or ""), values),
+        "body": _render_template(str(template.get("body_template") or ""), values),
+    }
 
 
 def generate_follow_up_message(

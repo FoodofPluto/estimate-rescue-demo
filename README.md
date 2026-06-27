@@ -69,7 +69,7 @@ Generated messages are intentionally conservative: no fake discounts, no fake sc
 
 ## Customer Response Links
 
-Each quote gets a unique public response token. When `APP_BASE_URL` is set, follow-up messages can include a link like:
+Each quote gets a unique, persisted public response token. When `APP_BASE_URL` is set, follow-up messages include an absolute link like:
 
 ```text
 http://localhost:8501/?page=Customer+Response+Page&token=<token>
@@ -84,9 +84,17 @@ The customer can choose:
 
 The response updates quote status and writes an activity log entry.
 
+If `APP_BASE_URL` is unset, the app displays a tokenized relative link. Set the base URL in deployed environments so copied links work outside the current browser session. Existing legacy quotes with missing tokens are backfilled during database initialization and also repaired on access.
+
+## Settings and Message Templates
+
+Business settings persist in SQLite. Quote Detail uses the business name in generated text, the default-from email for sending, and the owner email as reply-to. Saved `$variable` templates are used only when an operator explicitly selects one under **Quote Detail > Generate follow-up**; the edited subject and body then become the email draft. Templates do not alter the public customer response page, optional AI-generated drafts, or any automatic reminder flow. The app currently has no automatic reminder sender.
+
+Supported variables are `$customer_name`, `$business_name`, `$service_type`, `$quote_amount`, and `$response_link`. Saving a template does not send a message.
+
 ## Seed Demo Data
 
-The app seeds demo data automatically when the quotes table is empty. You can also run:
+The app does not seed demo data automatically. A fresh database starts with clean empty states. For explicit local development only, run:
 
 ```bash
 python seed_data.py

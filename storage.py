@@ -109,6 +109,16 @@ def init_db() -> None:
             );
             """
         )
+        # Older databases may contain quotes created before response tokens were
+        # consistently assigned. Repair those rows once and persist the value.
+        tokenless_ids = conn.execute(
+            "SELECT id FROM quotes WHERE public_response_token IS NULL OR TRIM(public_response_token) = ''"
+        ).fetchall()
+        for row in tokenless_ids:
+            conn.execute(
+                "UPDATE quotes SET public_response_token=?, updated_at=? WHERE id=?",
+                (uuid.uuid4().hex, now_iso(), row["id"]),
+            )
 
 
 def get_business_settings() -> dict[str, Any]:
@@ -268,6 +278,23 @@ def get_quote(quote_id: int) -> dict[str, Any] | None:
     return _row_to_dict(row)
 
 
+def ensure_quote_response_token(quote_id: int) -> str | None:
+    """Return a quote's stable token, creating and persisting one if absent."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT public_response_token FROM quotes WHERE id=?", (quote_id,)).fetchone()
+        if not row:
+            return None
+        token = str(row["public_response_token"] or "").strip()
+        if token:
+            return token
+        token = uuid.uuid4().hex
+        conn.execute(
+            "UPDATE quotes SET public_response_token=?, updated_at=? WHERE id=?",
+            (token, now_iso(), quote_id),
+        )
+    return token
+
+
 def get_quote_by_token(token: str) -> dict[str, Any] | None:
     if not token:
         return None
@@ -288,6 +315,11 @@ def list_quotes() -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_dashboard_quotes() -> list[dict[str, Any]]:
+    """List real operator quotes, excluding explicitly seeded demo records."""
+    return [quote for quote in list_quotes() if quote.get("source") != "demo seed"]
 
 
 def list_follow_up_queue() -> list[dict[str, Any]]:
@@ -384,11 +416,18 @@ def add_activity(quote_id: int | None, activity_type: str, activity_summary: str
 
 
 def dashboard_metrics() -> dict[str, Any]:
-    quotes = list_quotes()
+    quotes = list_dashboard_quotes()
     open_quotes = [q for q in quotes if q["status"] not in {"won", "lost"}]
     today = datetime.now(UTC).date().isoformat()
     with get_connection() as conn:
-        activity = conn.execute("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 8").fetchall()
+        activity = conn.execute(
+            """
+            SELECT a.* FROM activity_log a
+            LEFT JOIN quotes q ON q.id = a.quote_id
+            WHERE q.id IS NULL OR COALESCE(q.source, '') != 'demo seed'
+            ORDER BY a.created_at DESC LIMIT 8
+            """
+        ).fetchall()
     return {
         "open_quotes": len(open_quotes),
         "follow_ups_due_today": len([q for q in open_quotes if _date_text(q["follow_up_due_date"]) == today]),
@@ -401,7 +440,7 @@ def dashboard_metrics() -> dict[str, Any]:
 
 
 def seed_demo_data_if_empty() -> None:
-    """Insert default settings, templates, and sample quotes when the database is empty."""
+    """Explicit development helper; the application never calls this automatically."""
     from seed_data import seed_demo_data
 
     with get_connection() as conn:
