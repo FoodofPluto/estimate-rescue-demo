@@ -33,12 +33,21 @@ def response_link_for_quote(quote: dict[str, Any]) -> str:
 
 def template_values(quote: dict[str, Any], business_settings: dict[str, Any]) -> dict[str, str]:
     """Return supported template variables for follow-up messages."""
+    amount = quote.get("quote_amount")
+    if amount is None or (isinstance(amount, str) and not amount.strip()):
+        amount = quote.get("amount")
+
+    def text(value: Any, default: str = "") -> str:
+        return str(value) if value is not None else default
+
     return {
-        "customer_name": quote.get("customer_name", "there"),
-        "business_name": business_settings.get("business_name") or "Blue Ridge Auto Detail",
-        "service_type": quote.get("service_type", "your service"),
-        "quote_amount": format_currency(quote.get("quote_amount")),
-        "response_link": response_link_for_quote(quote),
+        "customer_name": text(quote.get("customer_name"), "there"),
+        "business_name": text(
+            business_settings.get("business_name") or "Blue Ridge Auto Detail"
+        ),
+        "service_type": text(quote.get("service_type"), "your service"),
+        "quote_amount": format_currency(amount),
+        "response_link": text(response_link_for_quote(quote)),
     }
 
 

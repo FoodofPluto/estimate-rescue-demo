@@ -108,5 +108,13 @@ def suggest_next_action(quote: dict[str, Any]) -> str:
     return "Monitor until the follow-up due date."
 
 
-def format_currency(value: float | int | None) -> str:
-    return f"${float(value or 0):,.2f}"
+def format_currency(value: Any) -> str:
+    """Format common stored and display currency values without raising."""
+    if value is None:
+        return "$0.00"
+    try:
+        normalized = str(value).strip().replace("$", "").replace(",", "")
+        amount = float(normalized) if normalized else 0.0
+    except (TypeError, ValueError):
+        amount = 0.0
+    return f"${amount:,.2f}"

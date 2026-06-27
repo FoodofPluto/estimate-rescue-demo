@@ -80,3 +80,38 @@ def test_edited_persisted_template_changes_generated_output(tmp_path, monkeypatc
     )
     assert rendered["subject"] == "Estimate for Taylor"
     assert "token=persisted-token" in rendered["body"]
+
+
+def test_saved_template_renders_settings_sample():
+    import message_generator
+
+    rendered = message_generator.render_saved_template(
+        {
+            "subject_template": "$service_type estimate",
+            "body_template": "Hi $customer_name, your estimate is $quote_amount.",
+        },
+        {
+            "customer_name": "Maya",
+            "service_type": "Ceramic coating",
+            "quote_amount": 1295.0,
+            "response_link": "https://example.com/respond",
+        },
+        {"business_name": "Detail Shop"},
+    )
+    assert rendered == {
+        "subject": "Ceramic coating estimate",
+        "body": "Hi Maya, your estimate is $1,295.00.",
+    }
+
+
+def test_saved_template_supports_amount_alias_and_invalid_amount():
+    import message_generator
+
+    template = {"subject_template": "$quote_amount", "body_template": "$customer_name"}
+    settings = {"business_name": "Detail Shop"}
+    assert message_generator.render_saved_template(template, {"amount": "1,200"}, settings)[
+        "subject"
+    ] == "$1,200.00"
+    assert message_generator.render_saved_template(
+        template, {"quote_amount": "invalid"}, settings
+    )["subject"] == "$0.00"

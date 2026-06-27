@@ -364,12 +364,17 @@ def settings_page() -> None:
             "customer_name": "Maya",
             "business_name": settings["business_name"],
             "service_type": "Ceramic coating",
-            "quote_amount": "$1,295.00",
+            "quote_amount": 1295.0,
             "response_link": "https://example.com/respond",
         }
         st.subheader("Selected template preview")
-        st.write(render_saved_template(existing, sample, settings)["subject"])
-        st.text(render_saved_template(existing, sample, settings)["body"])
+        try:
+            preview = render_saved_template(existing, sample, settings)
+        except ValueError:
+            st.warning("This template contains an invalid placeholder. Check variables beginning with '$'.")
+        else:
+            st.write(preview["subject"])
+            st.text(preview["body"])
 
 
 PAGES = {
