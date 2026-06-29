@@ -72,7 +72,7 @@ Generated messages are intentionally conservative: no fake discounts, no fake sc
 Each quote gets a unique, persisted public response token. When `APP_BASE_URL` is set, follow-up messages include an absolute link like:
 
 ```text
-http://localhost:8501/?page=Customer+Response+Page&token=<token>
+http://localhost:8501?customer_response_token=<token>
 ```
 
 The customer can choose:

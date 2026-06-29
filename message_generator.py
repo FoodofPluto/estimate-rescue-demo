@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from urllib.parse import urlencode
 from string import Template
 from typing import Any
 
@@ -19,16 +20,29 @@ TONE_OPENERS = {
     "premium": "I wanted to personally follow up on your detailing estimate.",
 }
 
+CUSTOMER_RESPONSE_QUERY_PARAM = "customer_response_token"
+
 
 def response_link_for_quote(quote: dict[str, Any]) -> str:
-    if quote.get("response_link"):
-        return str(quote["response_link"])
     cfg = get_settings()
     token = quote.get("public_response_token")
     if token:
         base_url = cfg.app_base_url.rstrip("/") if cfg.app_base_url else ""
-        return f"{base_url}/?page=Customer+Response+Page&token={token}"
+        query = urlencode({CUSTOMER_RESPONSE_QUERY_PARAM: str(token)})
+        return f"{base_url}?{query}" if base_url else f"/?{query}"
+    if quote.get("response_link"):
+        return str(quote["response_link"])
     return ""
+
+
+def public_response_token(query_params: Any) -> tuple[bool, str]:
+    """Return whether the public route was requested and its normalized token."""
+    if CUSTOMER_RESPONSE_QUERY_PARAM not in query_params:
+        return False, ""
+    value = query_params.get(CUSTOMER_RESPONSE_QUERY_PARAM, "")
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return True, str(value or "").strip()
 
 
 def template_values(quote: dict[str, Any], business_settings: dict[str, Any]) -> dict[str, str]:

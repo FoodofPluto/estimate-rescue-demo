@@ -22,7 +22,7 @@ def test_message_includes_customer_service_and_business(monkeypatch):
     assert "Ceramic coating" in combined
     assert "Blue Ridge Auto Detail" in combined
     assert "https://demo.example" in combined
-    assert "token=abc123" in combined
+    assert "customer_response_token=abc123" in combined
 
 
 def test_response_link_contains_persisted_token(monkeypatch):
@@ -32,8 +32,32 @@ def test_response_link_contains_persisted_token(monkeypatch):
 
     importlib.reload(config)
     importlib.reload(message_generator)
-    link = message_generator.response_link_for_quote({"public_response_token": "stable-token"})
-    assert link == "https://demo.example/base/?page=Customer+Response+Page&token=stable-token"
+    link = message_generator.response_link_for_quote(
+        {"public_response_token": "stable-token", "response_link": "https://stale.example/old"}
+    )
+    assert link == "https://demo.example/base?customer_response_token=stable-token"
+
+
+def test_response_link_is_safe_relative_url_without_app_base_url(monkeypatch):
+    # An explicit empty value prevents the repository's local .env from being loaded.
+    monkeypatch.setenv("APP_BASE_URL", "")
+    import config
+    import message_generator
+
+    importlib.reload(config)
+    importlib.reload(message_generator)
+    link = message_generator.response_link_for_quote({"public_response_token": "stable token"})
+    assert link == "/?customer_response_token=stable+token"
+
+
+def test_public_router_reads_only_the_canonical_parameter():
+    import message_generator
+
+    assert message_generator.public_response_token(
+        {"customer_response_token": " stable-token "}
+    ) == (True, "stable-token")
+    assert message_generator.public_response_token({"token": "old-token"}) == (False, "")
+    assert message_generator.public_response_token({"customer_response_token": ""}) == (True, "")
 
 
 def test_template_values_are_safe_without_response_link(monkeypatch):
@@ -79,7 +103,7 @@ def test_edited_persisted_template_changes_generated_output(tmp_path, monkeypatc
         {"business_name": "Detail Shop"},
     )
     assert rendered["subject"] == "Estimate for Taylor"
-    assert "token=persisted-token" in rendered["body"]
+    assert "customer_response_token=persisted-token" in rendered["body"]
 
 
 def test_saved_template_renders_settings_sample():

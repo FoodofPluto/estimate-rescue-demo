@@ -10,9 +10,11 @@ import storage
 from config import get_settings
 from dashboard_editor import build_dashboard_editor_rows, dashboard_quote_updates
 from message_generator import (
+    CUSTOMER_RESPONSE_QUERY_PARAM,
     generate_ai_follow_up_message,
     generate_follow_up_message,
     render_saved_template,
+    public_response_token,
     response_link_for_quote,
 )
 from quote_logic import (
@@ -351,18 +353,23 @@ def customer_response_link_page() -> None:
     if not response_url:
         st.warning("A response link could not be generated. Configure APP_BASE_URL or verify the quote token.")
         return
+    st.subheader(str(quote["customer_name"]))
+    st.caption(f"{quote['service_type']} - {format_currency(quote['quote_amount'])}")
+    st.text_input("Stable response token", token, disabled=True)
     st.caption(f"Public response link for {quote['customer_name']}")
     st.code(response_url, language="text")
     st.link_button("Open customer response page", response_url)
-    if not get_settings().app_base_url:
+    if get_settings().app_base_url:
+        st.caption("This is an absolute link built from APP_BASE_URL and can be shared directly.")
+    else:
         st.caption("APP_BASE_URL is not configured, so this link is relative to the current app host.")
 
 
-def customer_response_page() -> None:
+def customer_response_page(token: str) -> None:
+    """Render the public form. Authentication and operator navigation are intentionally absent."""
     st.title("Customer Response")
-    token = st.query_params.get("token", "")
     if not token:
-        st.error("This response link is missing a token.")
+        st.error(f"This response link is missing the {CUSTOMER_RESPONSE_QUERY_PARAM} token.")
         return
     quote = storage.get_quote_by_token(token)
     if not quote:
@@ -431,7 +438,7 @@ def settings_page() -> None:
         "customer_name": "Maya Chen",
         "service_type": "Ceramic coating",
         "quote_amount": "$1,295.00",
-        "response_link": "https://example.com/?page=Customer+Response+Page&token=sample",
+        "response_link": "https://example.com?customer_response_token=sample",
     }
     st.subheader("Safe sample preview")
     st.caption("Preview data: Maya Chen, ceramic coating, $1,295.00. No email is sent.")
@@ -454,12 +461,23 @@ PAGES = {
     "Follow-Up Queue": follow_up_queue,
     "Quote Detail": quote_detail,
     "Customer Response": customer_response_link_page,
-    "Customer Response Page": customer_response_page,
     "Settings / Message Templates": settings_page,
 }
 
 
+def render_public_response_route(query_params: object) -> bool:
+    """Render and claim a public response request before operator routing runs."""
+    public_route_requested, token = public_response_token(query_params)
+    if not public_route_requested:
+        return False
+    customer_response_page(token)
+    return True
+
+
 def main() -> None:
+    if render_public_response_route(st.query_params):
+        return
+
     if is_logged_in() and st.sidebar.button("Logout"):
         st.session_state["logged_in"] = False
         st.session_state.pop("selected_quote_id", None)
