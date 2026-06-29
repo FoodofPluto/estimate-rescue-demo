@@ -118,3 +118,11 @@ def format_currency(value: Any) -> str:
     except (TypeError, ValueError):
         amount = 0.0
     return f"${amount:,.2f}"
+
+
+def quote_selector_label(quote: dict[str, Any]) -> str:
+    """Return a customer-first, unique-enough label while preserving ID lookup."""
+    customer = str(quote.get("customer_name") or "").strip() or "Unnamed Customer"
+    amount = format_currency(quote.get("quote_amount"))
+    created = str(quote.get("created_at") or quote.get("quote_date") or "Unknown date").split("T", 1)[0]
+    return f"{customer} — {amount}, {created} (Quote #{quote.get('id')})"

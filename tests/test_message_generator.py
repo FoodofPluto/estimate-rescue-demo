@@ -115,3 +115,21 @@ def test_saved_template_supports_amount_alias_and_invalid_amount():
     assert message_generator.render_saved_template(
         template, {"quote_amount": "invalid"}, settings
     )["subject"] == "$0.00"
+
+
+def test_saved_template_preview_tolerates_missing_and_invalid_placeholders():
+    import message_generator
+
+    settings = {"business_name": "Detail Shop"}
+    missing = message_generator.render_saved_template(
+        {"subject_template": "$customer_name", "body_template": "$unknown_value"}, {}, settings
+    )
+    assert missing["subject"] == "there"
+    assert missing["body"] == "$unknown_value"
+
+    invalid = message_generator.render_saved_template(
+        {"subject_template": "$", "body_template": "$quote_amount"},
+        {"quote_amount": "$1,200.50"},
+        settings,
+    )
+    assert invalid == {"subject": "$", "body": "$1,200.50"}

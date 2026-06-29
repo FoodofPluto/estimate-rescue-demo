@@ -21,6 +21,7 @@ from quote_logic import (
     default_follow_up_due_date,
     format_currency,
     normalize_status,
+    quote_selector_label,
     suggest_next_action,
 )
 
@@ -177,6 +178,23 @@ def follow_up_queue() -> None:
         return
     st.title("Follow-Up Queue")
     st.caption("Due and overdue quotes that need operator attention.")
+    quotes = storage.list_quotes()
+    if not quotes:
+        st.info("No quotes yet.")
+        return
+    quote = selected_quote_control(quotes, "Selected quote", "follow_up")
+    settings = storage.get_business_settings()
+    recommended = generate_follow_up_message(quote, settings)
+    cols = st.columns(3)
+    cols[0].metric("Customer", quote["customer_name"])
+    cols[1].metric("Amount", format_currency(quote["quote_amount"]))
+    cols[2].metric("Status", STATUSES[normalize_status(quote["status"])])
+    st.write(suggest_next_action(quote))
+    st.caption("Recommended follow-up message")
+    st.write(recommended["subject"])
+    st.text(recommended["body"])
+
+    st.subheader("Due and overdue")
     queue = storage.list_follow_up_queue()
     if not queue:
         st.success("No due or overdue follow-ups.")
@@ -196,24 +214,41 @@ def follow_up_queue() -> None:
             }
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
-    selected = st.selectbox("Open quote", [q["id"] for q in queue], format_func=lambda qid: f"Quote #{qid}")
-    if st.button("Open selected quote"):
-        st.session_state["selected_quote_id"] = selected
+    if st.button("Open selected quote in Quote Detail"):
         st.session_state["page"] = "Quote Detail"
         st.rerun()
+
+
+def selected_quote_control(quotes: list[dict], label: str, widget_suffix: str) -> dict:
+    """Render a customer-friendly selector backed by one canonical quote ID."""
+    quote_by_id = {int(quote["id"]): quote for quote in quotes}
+    quote_ids = list(quote_by_id)
+    selected_id = st.session_state.get("selected_quote_id")
+    if selected_id not in quote_by_id:
+        selected_id = quote_ids[0]
+        st.session_state["selected_quote_id"] = selected_id
+    selected_id = st.selectbox(
+        label,
+        quote_ids,
+        index=quote_ids.index(selected_id),
+        format_func=lambda quote_id: quote_selector_label(quote_by_id[quote_id]),
+        key=f"_quote_selector_{widget_suffix}",
+    )
+    st.session_state["selected_quote_id"] = selected_id
+    return quote_by_id[selected_id]
 
 
 def quote_detail() -> None:
     if not require_login():
         return
     st.title("Quote Detail")
-    quote_ids = [q["id"] for q in storage.list_quotes()]
-    if not quote_ids:
+    quotes = storage.list_quotes()
+    if not quotes:
         st.info("No quotes yet.")
         return
-    default_id = st.session_state.get("selected_quote_id", quote_ids[0])
-    quote_id = st.selectbox("Quote", quote_ids, index=quote_ids.index(default_id) if default_id in quote_ids else 0)
-    quote = storage.get_quote(int(quote_id))
+    selected = selected_quote_control(quotes, "Quote", "detail")
+    quote_id = int(selected["id"])
+    quote = storage.get_quote(quote_id)
     if not quote:
         st.error("Quote not found.")
         return
@@ -297,6 +332,32 @@ def quote_detail() -> None:
     st.dataframe(storage.list_customer_responses_for_quote(quote["id"]), use_container_width=True, hide_index=True)
 
 
+def customer_response_link_page() -> None:
+    """Authenticated operator view for the selected quote's public response URL."""
+    if not require_login():
+        return
+    st.title("Customer Response")
+    quotes = storage.list_quotes()
+    if not quotes:
+        st.info("No quotes yet.")
+        return
+    quote = selected_quote_control(quotes, "Selected quote", "response_link")
+    token = storage.ensure_quote_response_token(int(quote["id"]))
+    if not token:
+        st.warning("A response link could not be created because the selected quote is missing or unavailable.")
+        return
+    quote["public_response_token"] = token
+    response_url = response_link_for_quote(quote)
+    if not response_url:
+        st.warning("A response link could not be generated. Configure APP_BASE_URL or verify the quote token.")
+        return
+    st.caption(f"Public response link for {quote['customer_name']}")
+    st.code(response_url, language="text")
+    st.link_button("Open customer response page", response_url)
+    if not get_settings().app_base_url:
+        st.caption("APP_BASE_URL is not configured, so this link is relative to the current app host.")
+
+
 def customer_response_page() -> None:
     st.title("Customer Response")
     token = st.query_params.get("token", "")
@@ -329,7 +390,8 @@ def settings_page() -> None:
         return
     st.title("Settings / Message Templates")
     st.info(
-        "Business settings supply the sender/reply-to details and template variables used by Quote Detail. "
+        "Business settings and message templates are stored in the app's SQLite database. Business settings "
+        "supply the sender/reply-to details and template variables used by Quote Detail. "
         "Saved templates affect a follow-up draft only when the operator selects that template in Quote Detail. "
         "They do not change the public customer response page, optional AI drafts, or create automatic reminders."
     )
@@ -345,8 +407,14 @@ def settings_page() -> None:
             st.success("Settings saved.")
 
     st.subheader("Templates")
-    st.caption("Use: operator-generated email drafts in Quote Detail. Saving a template does not send anything.")
-    st.caption("Variables: $customer_name, $business_name, $service_type, $quote_amount, $response_link")
+    st.caption(
+        "Each saved template controls the subject and body of an operator-generated email draft only when "
+        "that template is selected in Quote Detail. Saving or previewing a template does not send anything."
+    )
+    st.caption(
+        "Supported placeholders: $customer_name, $business_name, $service_type, $quote_amount, "
+        "$response_link. Use $$ for a literal dollar sign. Unknown or missing placeholders remain visible."
+    )
     templates = storage.list_message_templates()
     selected_key = st.selectbox("Template", [t["template_key"] for t in templates] or ["first_follow_up"])
     existing = next((t for t in templates if t["template_key"] == selected_key), {})
@@ -359,22 +427,23 @@ def settings_page() -> None:
             storage.upsert_message_template(template_key, template_name, subject_template, body_template)
             st.success("Template saved.")
 
-    if templates:
-        sample = {
-            "customer_name": "Maya",
-            "business_name": settings["business_name"],
-            "service_type": "Ceramic coating",
-            "quote_amount": 1295.0,
-            "response_link": "https://example.com/respond",
-        }
-        st.subheader("Selected template preview")
-        try:
-            preview = render_saved_template(existing, sample, settings)
-        except ValueError:
-            st.warning("This template contains an invalid placeholder. Check variables beginning with '$'.")
-        else:
-            st.write(preview["subject"])
-            st.text(preview["body"])
+    sample = {
+        "customer_name": "Maya Chen",
+        "service_type": "Ceramic coating",
+        "quote_amount": "$1,295.00",
+        "response_link": "https://example.com/?page=Customer+Response+Page&token=sample",
+    }
+    st.subheader("Safe sample preview")
+    st.caption("Preview data: Maya Chen, ceramic coating, $1,295.00. No email is sent.")
+    try:
+        preview = render_saved_template(
+            {"subject_template": subject_template, "body_template": body_template}, sample, settings
+        )
+    except (TypeError, ValueError):
+        st.warning("This template could not be previewed. Check placeholders beginning with '$'.")
+    else:
+        st.write(preview["subject"])
+        st.text(preview["body"])
 
 
 PAGES = {
@@ -384,6 +453,7 @@ PAGES = {
     "Add Quote": add_quote_page,
     "Follow-Up Queue": follow_up_queue,
     "Quote Detail": quote_detail,
+    "Customer Response": customer_response_link_page,
     "Customer Response Page": customer_response_page,
     "Settings / Message Templates": settings_page,
 }
