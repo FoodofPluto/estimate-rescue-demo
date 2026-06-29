@@ -392,67 +392,6 @@ def customer_response_page(token: str) -> None:
             st.success("Thanks, your response has been recorded.")
 
 
-def settings_page() -> None:
-    if not require_login():
-        return
-    st.title("Settings / Message Templates")
-    st.info(
-        "Business settings and message templates are stored in the app's SQLite database. Business settings "
-        "supply the sender/reply-to details and template variables used by Quote Detail. "
-        "Saved templates affect a follow-up draft only when the operator selects that template in Quote Detail. "
-        "They do not change the public customer response page, optional AI drafts, or create automatic reminders."
-    )
-    settings = storage.get_business_settings()
-    with st.form("business_settings"):
-        business_name = st.text_input("Business name", settings["business_name"])
-        owner_email = st.text_input("Owner email", settings["owner_email"])
-        default_from_email = st.text_input("Default from email", settings["default_from_email"])
-        service_category = st.text_input("Service category", settings["service_category"])
-        brand_voice = st.text_area("Brand voice", settings["brand_voice"])
-        if st.form_submit_button("Save settings"):
-            storage.upsert_business_settings(business_name, owner_email, default_from_email, service_category, brand_voice)
-            st.success("Settings saved.")
-
-    st.subheader("Templates")
-    st.caption(
-        "Each saved template controls the subject and body of an operator-generated email draft only when "
-        "that template is selected in Quote Detail. Saving or previewing a template does not send anything."
-    )
-    st.caption(
-        "Supported placeholders: $customer_name, $business_name, $service_type, $quote_amount, "
-        "$response_link. Use $$ for a literal dollar sign. Unknown or missing placeholders remain visible."
-    )
-    templates = storage.list_message_templates()
-    selected_key = st.selectbox("Template", [t["template_key"] for t in templates] or ["first_follow_up"])
-    existing = next((t for t in templates if t["template_key"] == selected_key), {})
-    with st.form("template_form"):
-        template_key = st.text_input("Template key", existing.get("template_key", selected_key))
-        template_name = st.text_input("Template name", existing.get("template_name", "First Follow-Up"))
-        subject_template = st.text_input("Subject template", existing.get("subject_template", "Following up on your $service_type estimate"))
-        body_template = st.text_area("Body template", existing.get("body_template", "Hi $customer_name,\n\nChecking in from $business_name."))
-        if st.form_submit_button("Save template"):
-            storage.upsert_message_template(template_key, template_name, subject_template, body_template)
-            st.success("Template saved.")
-
-    sample = {
-        "customer_name": "Maya Chen",
-        "service_type": "Ceramic coating",
-        "quote_amount": "$1,295.00",
-        "response_link": "https://example.com?customer_response_token=sample",
-    }
-    st.subheader("Safe sample preview")
-    st.caption("Preview data: Maya Chen, ceramic coating, $1,295.00. No email is sent.")
-    try:
-        preview = render_saved_template(
-            {"subject_template": subject_template, "body_template": body_template}, sample, settings
-        )
-    except (TypeError, ValueError):
-        st.warning("This template could not be previewed. Check placeholders beginning with '$'.")
-    else:
-        st.write(preview["subject"])
-        st.text(preview["body"])
-
-
 PAGES = {
     "Public Demo Home": public_home,
     "Operator Login": login_page,
@@ -461,7 +400,6 @@ PAGES = {
     "Follow-Up Queue": follow_up_queue,
     "Quote Detail": quote_detail,
     "Customer Response": customer_response_link_page,
-    "Settings / Message Templates": settings_page,
 }
 
 

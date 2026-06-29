@@ -34,6 +34,13 @@ def test_operator_customer_response_screen_is_only_link_management(tmp_path, mon
     assert "missing a token" not in operator_source
 
 
+def test_settings_message_templates_is_not_operator_navigation(tmp_path, monkeypatch):
+    app = load_app(tmp_path, monkeypatch)
+
+    assert "Settings / Message Templates" not in app.PAGES
+    assert not hasattr(app, "settings_page")
+
+
 class SidebarStub:
     def __init__(self):
         self.radio_call = None
@@ -81,6 +88,18 @@ def test_invalid_session_page_resets_to_safe_default(tmp_path, monkeypatch):
         ["Public Demo Home", "Customer Response"],
         0,
     )
+    assert rendered == ["Public Demo Home"]
+
+
+def test_removed_settings_session_page_resets_to_safe_default(tmp_path, monkeypatch):
+    app = load_app(tmp_path, monkeypatch)
+
+    session_state, sidebar, rendered = run_operator_navigation(
+        app, monkeypatch, "Settings / Message Templates"
+    )
+
+    assert session_state["page"] == "Public Demo Home"
+    assert "Settings / Message Templates" not in sidebar.radio_call[1]
     assert rendered == ["Public Demo Home"]
 
 
