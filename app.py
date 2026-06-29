@@ -486,7 +486,15 @@ def main() -> None:
     if query_page in PAGES:
         st.session_state["page"] = query_page
     current_page = st.session_state.get("page", "Public Demo Home")
-    page = st.sidebar.radio("Navigation", list(PAGES), index=list(PAGES).index(current_page))
+    page_names = list(PAGES)
+    if current_page not in PAGES:
+        current_page = page_names[0]
+        st.session_state["page"] = current_page
+    page = st.sidebar.radio(
+        "Navigation",
+        page_names,
+        index=page_names.index(current_page),
+    )
     if page != current_page:
         st.session_state["page"] = page
         st.rerun()
