@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from config import get_settings
 from quote_logic import default_follow_up_due_date, normalize_status
+from leadloop_logic import completed_stage, follow_up_action
 
 
 def now_iso() -> str:
@@ -107,6 +108,54 @@ def init_db() -> None:
                 created_at TEXT,
                 FOREIGN KEY (quote_id) REFERENCES quotes(id)
             );
+
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                phone TEXT,
+                service_type TEXT NOT NULL,
+                urgency TEXT NOT NULL,
+                preferred_contact_method TEXT,
+                description TEXT,
+                source TEXT NOT NULL DEFAULT 'Website',
+                status TEXT NOT NULL DEFAULT 'New',
+                status_changed_at TEXT,
+                assigned_to TEXT,
+                next_follow_up_at TEXT,
+                follow_up_stage INTEGER NOT NULL DEFAULT 0,
+                paused INTEGER NOT NULL DEFAULT 0,
+                opted_out INTEGER NOT NULL DEFAULT 0,
+                no_further_follow_up INTEGER NOT NULL DEFAULT 0,
+                booked_value_estimate REAL,
+                outcome TEXT,
+                last_event_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS lead_events (
+                id INTEGER PRIMARY KEY,
+                lead_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                message TEXT NOT NULL,
+                metadata TEXT,
+                FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY,
+                lead_id INTEGER NOT NULL,
+                scheduled_at TEXT,
+                sent_at TEXT,
+                channel TEXT NOT NULL,
+                template_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                preview_text TEXT NOT NULL,
+                error TEXT,
+                FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+            );
             """
         )
         # Older databases may contain quotes created before response tokens were
@@ -119,6 +168,147 @@ def init_db() -> None:
                 "UPDATE quotes SET public_response_token=?, updated_at=? WHERE id=?",
                 (uuid.uuid4().hex, now_iso(), row["id"]),
             )
+        lead_columns = {row["name"] for row in conn.execute("PRAGMA table_info(leads)").fetchall()}
+        if "status_changed_at" not in lead_columns:
+            conn.execute("ALTER TABLE leads ADD COLUMN status_changed_at TEXT")
+        conn.execute("UPDATE leads SET status_changed_at=created_at WHERE status_changed_at IS NULL")
+
+
+def add_lead_event(lead_id: int, event_type: str, actor: str, message: str, metadata: str | None = None) -> int:
+    stamp = now_iso()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO lead_events (lead_id,timestamp,event_type,actor,message,metadata) VALUES (?,?,?,?,?,?)",
+            (lead_id, stamp, event_type, actor, message, metadata),
+        )
+        conn.execute("UPDATE leads SET last_event_at=? WHERE id=?", (stamp, lead_id))
+    return int(cur.lastrowid)
+
+
+def create_lead(*, customer_name: str, email: str, phone: str, service_type: str, urgency: str,
+                preferred_contact_method: str, description: str, source: str = "Website",
+                status: str = "New", created_at: str | None = None, assigned_to: str = "Office") -> int:
+    stamp = created_at or now_iso()
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO leads (created_at,customer_name,email,phone,service_type,urgency,
+            preferred_contact_method,description,source,status,assigned_to,next_follow_up_at,last_event_at,
+            status_changed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (stamp, customer_name.strip(), email.strip(), phone.strip(), service_type, urgency,
+             preferred_contact_method, description.strip(), source, status, assigned_to, stamp, stamp, stamp),
+        )
+        lead_id = int(cur.lastrowid)
+    acknowledgment = f"Thanks {customer_name.strip()}, Blue Ridge Comfort Pros received your request. Our office will follow up shortly."
+    add_lead_event(lead_id, "lead_created", "System", "Web estimate request stored.")
+    add_lead_event(lead_id, "acknowledgment", "System", acknowledgment)
+    add_lead_event(lead_id, "internal_alert", "System", f"Office alerted: new {urgency.lower()} {service_type} lead.")
+    with get_connection() as conn:
+        conn.execute("""INSERT INTO messages (lead_id,scheduled_at,sent_at,channel,template_name,status,preview_text)
+            VALUES (?,?,?,?,?,?,?)""", (lead_id, stamp, stamp, preferred_contact_method.lower(),
+            "new_lead_acknowledgment", "simulated", acknowledgment))
+    return lead_id
+
+
+def list_leads(status: str | None = None) -> list[dict[str, Any]]:
+    query = "SELECT * FROM leads"
+    params: tuple[Any, ...] = ()
+    if status and status != "All":
+        query += " WHERE status=?"
+        params = (status,)
+    query += " ORDER BY created_at DESC"
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_lead(lead_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def list_lead_events(lead_id: int) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM lead_events WHERE lead_id=? ORDER BY timestamp DESC,id DESC", (lead_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_lead_messages(lead_id: int) -> list[dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM messages WHERE lead_id=? ORDER BY id DESC", (lead_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_lead(lead_id: int, *, actor: str = "Operator", **fields: Any) -> None:
+    allowed = {"status", "assigned_to", "next_follow_up_at", "follow_up_stage", "paused",
+               "booked_value_estimate", "outcome", "no_further_follow_up"}
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    current = get_lead(lead_id)
+    if not current:
+        raise ValueError("Lead not found")
+    updates = {key: value for key, value in updates.items() if current.get(key) != value}
+    if not updates:
+        return
+    if "status" in updates:
+        updates["status_changed_at"] = now_iso()
+        if updates["status"] == "Estimate Sent":
+            updates["follow_up_stage"] = 0
+    clause = ", ".join(f"{key}=?" for key in updates)
+    with get_connection() as conn:
+        conn.execute(f"UPDATE leads SET {clause} WHERE id=?", (*updates.values(), lead_id))
+    summary = ", ".join(f"{key.replace('_', ' ')}: {value}" for key, value in updates.items())
+    add_lead_event(lead_id, "lead_updated", actor, summary)
+
+
+def add_internal_note(lead_id: int, note: str) -> None:
+    add_lead_event(lead_id, "internal_note", "Operator", note.strip())
+
+
+def create_simulated_follow_up(lead_id: int, preview_text: str, channel: str = "email") -> int:
+    lead = get_lead(lead_id)
+    if not lead:
+        raise ValueError("Lead not found")
+    action = follow_up_action(lead)
+    stamp = now_iso()
+    with get_connection() as conn:
+        cur = conn.execute("""INSERT INTO messages (lead_id,scheduled_at,sent_at,channel,template_name,status,preview_text)
+            VALUES (?,?,?,?,?,?,?)""", (lead_id, stamp, stamp, channel, "estimate_follow_up", "simulated", preview_text))
+    add_lead_event(lead_id, "follow_up_completed", "Operator", f"{channel.title()} follow-up simulated in Demo Mode.")
+    if lead["status"] == "New":
+        update_lead(lead_id, status="Contacted")
+    else:
+        stage = max(int(lead.get("follow_up_stage") or 0), completed_stage(action))
+        update_lead(lead_id, follow_up_stage=stage)
+    return int(cur.lastrowid)
+
+
+def list_follow_up_leads() -> list[dict[str, Any]]:
+    return [lead for lead in list_leads() if follow_up_action(lead)]
+
+
+def weekly_summary() -> dict[str, int]:
+    cutoff = datetime.now(UTC) - timedelta(days=7)
+    leads = [
+        lead for lead in list_leads()
+        if datetime.fromisoformat(str(lead["created_at"]).replace("Z", "+00:00")) >= cutoff
+    ]
+    events = [event for lead in leads for event in list_lead_events(int(lead["id"]))]
+    return {
+        "new_leads": len(leads),
+        "acknowledged": sum(e["event_type"] == "acknowledgment" for e in events),
+        "needing_follow_up": len(list_follow_up_leads()),
+        "follow_ups_completed": sum(e["event_type"] == "follow_up_completed" for e in events),
+        "booked": sum(lead["status"] == "Booked" for lead in leads),
+        "lost": sum(lead["status"] == "Lost" for lead in leads),
+        "pending": sum(lead["status"] not in {"Booked", "Lost"} for lead in leads),
+    }
+
+
+def reset_leadloop_demo_data() -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM messages")
+        conn.execute("DELETE FROM lead_events")
+        conn.execute("DELETE FROM leads")
 
 
 def get_business_settings() -> dict[str, Any]:
@@ -444,6 +634,6 @@ def seed_demo_data_if_empty() -> None:
     from seed_data import seed_demo_data
 
     with get_connection() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM quotes").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0]
     if count == 0:
         seed_demo_data()

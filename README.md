@@ -1,132 +1,44 @@
-# Estimate Rescue
+# LeadLoop Ops
 
-Estimate Rescue is a lightweight Streamlit + SQLite MVP for local service businesses that send quotes and then forget to follow up. It helps an owner see which estimates need attention, draft a useful follow-up, send or record the email, and track whether the quote was won, lost, or still pending.
+LeadLoop Ops helps small home-service companies respond to every web lead quickly and follow up every open estimate so fewer jobs fall through the cracks.
 
-The demo business is **Blue Ridge Auto Detail**, a fake auto detailing shop with sample ceramic coating, interior cleaning, paint correction, maintenance, and fleet wash opportunities.
+This Streamlit + SQLite sales demo is configured for the fictional HVAC company **Blue Ridge Comfort Pros**. It demonstrates public lead intake, immediate simulated acknowledgment, an internal operator dashboard, deterministic estimate follow-up, opportunity outcomes, audit history, and an owner weekly summary. It supplements an existing CRM; it is not a CRM replacement.
 
-## Demo Story
+## Run locally
 
-Blue Ridge Auto Detail sends several estimates each week. Some customers are ready to book, some have questions, and some simply need a timely nudge. Estimate Rescue gives the operator a simple queue of open quotes, a deterministic recovery score, an editable follow-up message, and a public response link customers can use without logging in.
-
-The goal is not to be a full CRM. It is a focused small-business workflow demo: recover unsold quotes before they go cold.
-
-## Screens And Pages
-
-- **Public Demo Home**: explains the problem and demo business.
-- **Operator Login**: uses `ADMIN_PASSWORD`; no third-party auth.
-- **Operator Dashboard**: shows open quotes, due follow-ups, overdue quotes, open value, won value, lost value, recent activity, and top recovery opportunities.
-- **Add Quote**: creates a quote and assigns a follow-up due date.
-- **Follow-Up Queue**: lists due and overdue opportunities with score and suggested next action.
-- **Quote Detail**: shows quote context, message generation, follow-up history, customer responses, and manual status updates.
-- **Customer Response Page**: lets a customer respond from a tokenized public link.
-- **Settings / Message Templates**: edits business settings and simple `$variable` templates.
-
-## Local Setup
-
-```bash
-cd estimate-rescue-demo
-python -m venv .venv
-.venv\Scripts\activate
+```powershell
+cd C:\Users\andro\Projects\estimate-rescue-demo
 pip install -r requirements.txt
-copy .env.example .env
+$env:ADMIN_PASSWORD="demo"
+python seed_data.py
 streamlit run app.py
 ```
 
-Set `ADMIN_PASSWORD` in `.env` before using operator pages. If `.env` is missing, the app still starts; operator pages stay locked until `ADMIN_PASSWORD` is configured.
+Operator pages remain locked when `ADMIN_PASSWORD` is absent. The customer request page remains public.
 
-## Environment Variables
+## Demo flow
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `ADMIN_PASSWORD` | Yes for operator pages | Simple local/demo login password. |
-| `RESEND_API_KEY` | No | Enables live email sending through Resend. |
-| `RESEND_FROM_EMAIL` | No | Sender address used by Resend. |
-| `OWNER_EMAIL` | No | Reply-to and default owner contact. |
-| `OPENAI_API_KEY` | No | Enables optional AI follow-up helper. |
-| `APP_BASE_URL` | Recommended | Base URL for customer response links, such as `http://localhost:8501`. |
-| `DATABASE_PATH` | No | SQLite file path. Defaults to `estimate_rescue.db`. |
+1. Submit a request under **Customer Estimate Request**.
+2. Log in and open **Operator Dashboard**; the request appears with its next action.
+3. Open **Lead Detail** to assign it, change its status, add a note, or preview/simulate a follow-up.
+4. Review rule-based work in **Follow-Up Queue**.
+5. Show the results in **Weekly Summary**.
 
-`.env.example` contains placeholders only. Do not commit `.env` or Streamlit secrets.
+Use **Demo Controls → Reset and reseed demo data** for a clean walkthrough, or run `python seed_data.py`. Seeding is idempotent and adds only missing fictional records; it does not overwrite homeowner submissions.
 
-## Email Setup
+## Messaging safety
 
-The app uses Resend through Python's standard `urllib.request`.
-
-If `RESEND_API_KEY` or `RESEND_FROM_EMAIL` is missing, sending does not crash. The app records the follow-up with `email_disabled`, which keeps the local demo useful without any external service.
-
-The Resend request includes:
-
-- `Authorization: Bearer <RESEND_API_KEY>`
-- `Content-Type: application/json`
-- `Accept: application/json`
-- `User-Agent: EstimateRescueStreamlit/1.0`
-
-## OpenAI Optional Helper
-
-Deterministic template logic is the default and the app works without OpenAI. If `OPENAI_API_KEY` is set, the Quote Detail page can try an AI-generated draft. The deterministic version remains the fallback.
-
-Generated messages are intentionally conservative: no fake discounts, no fake scarcity, no guarantees, and no unsupported claims.
-
-## Customer Response Links
-
-Each quote gets a unique, persisted public response token. When `APP_BASE_URL` is set, follow-up messages include an absolute link like:
-
-```text
-http://localhost:8501?customer_response_token=<token>
-```
-
-The customer can choose:
-
-- I want to book
-- I have a question
-- I am still deciding
-- Not interested anymore
-
-The response updates quote status and writes an activity log entry.
-
-If `APP_BASE_URL` is unset, the app displays a tokenized relative link. Set the base URL in deployed environments so copied links work outside the current browser session. Existing legacy quotes with missing tokens are backfilled during database initialization and also repaired on access.
-
-## Settings and Message Templates
-
-Business settings persist in SQLite. Quote Detail uses the business name in generated text, the default-from email for sending, and the owner email as reply-to. Saved `$variable` templates are used only when an operator explicitly selects one under **Quote Detail > Generate follow-up**; the edited subject and body then become the email draft. Templates do not alter the public customer response page, optional AI-generated drafts, or any automatic reminder flow. The app currently has no automatic reminder sender.
-
-Supported variables are `$customer_name`, `$business_name`, `$service_type`, `$quote_amount`, and `$response_link`. Saving a template does not send a message.
-
-## Seed Demo Data
-
-The app does not seed demo data automatically. A fresh database starts with clean empty states. For explicit local development only, run:
-
-```bash
-python seed_data.py
-```
-
-The seeded demo quotes are idempotent and will not duplicate endlessly.
+LeadLoop workflow messages are always recorded as `simulated`; no email or SMS leaves the app. The legacy optional Resend module remains in the repository for compatibility but is not called by the LeadLoop UI. No credentials are stored in source.
 
 ## Tests
 
-```bash
-python -m py_compile app.py config.py storage.py quote_logic.py message_generator.py emailer.py seed_data.py
-pytest
+```powershell
+python -m py_compile app.py config.py storage.py leadloop_logic.py seed_data.py emailer.py
+pytest --basetemp=.pytest-tmp
 ```
 
-Tests cover database initialization, quote creation, dashboard metrics, follow-up queue logic, seed idempotency, customer response status mapping, disabled email behavior, message generation, template values, and Resend request construction.
+SQLite is appropriate for this portfolio demo, not multi-user production deployment. There is no CRM sync, SMS provider, scheduling integration, or multi-tenant account model.
 
-## Streamlit Cloud Deployment Notes
+## Intentionally out of scope
 
-1. Push the project without `.env`, `*.db`, `.pytest_cache/`, or virtualenv folders.
-2. Add secrets in Streamlit Cloud for `ADMIN_PASSWORD`, `APP_BASE_URL`, and any optional Resend/OpenAI settings.
-3. Leave `DATABASE_PATH` as the default unless you need a custom file location.
-4. Remember that SQLite on Streamlit Cloud is suitable for a portfolio demo, not durable production storage.
-
-## Portfolio Positioning
-
-Estimate Rescue complements **Lead Rescue** by focusing on the post-estimate stage instead of new lead capture. Together, they show a practical small-business automation theme: capture demand, follow up at the right time, and keep the owner focused on revenue opportunities.
-
-## Known Limitations
-
-- No multi-user accounts or authentication provider.
-- No SMS, calendar, Stripe, or CRM sync.
-- No durable cloud database.
-- Public response links are tokenized but not authenticated.
-- Email deliverability depends on a correctly configured Resend domain.
-- The recovery score is deterministic and intentionally simple.
+LeadLoop Ops is a managed lead-response and estimate-follow-up workflow, not a full CRM or autonomous messaging platform. Real outbound messaging, CRM synchronization, billing, multi-tenancy, and production-grade authentication are intentionally excluded from this sales demo.

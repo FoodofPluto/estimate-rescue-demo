@@ -180,11 +180,11 @@ def test_disabled_email_follow_up_can_be_recorded(tmp_path, monkeypatch):
 def test_seed_demo_data_if_empty_is_idempotent(tmp_path):
     storage = load_storage(tmp_path)
     storage.seed_demo_data_if_empty()
-    first_count = len(storage.list_quotes())
+    first_count = len(storage.list_leads())
     storage.seed_demo_data_if_empty()
-    second_count = len(storage.list_quotes())
-    assert first_count == 5
-    assert second_count == 5
+    second_count = len(storage.list_leads())
+    assert first_count == 8
+    assert second_count == 8
 
 
 def test_dashboard_metrics_after_status_change(tmp_path):

@@ -1,0 +1,119 @@
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_customer_response_routing.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/app.py b/app.py[m
+[1mindex 789148f..69736a9 100644[m
+[1m--- a/app.py[m
+[1m+++ b/app.py[m
+[36m@@ -392,67 +392,6 @@[m [mdef customer_response_page(token: str) -> None:[m
+             st.success("Thanks, your response has been recorded.")[m
+ [m
+ [m
+[31m-def settings_page() -> None:[m
+[31m-    if not require_login():[m
+[31m-        return[m
+[31m-    st.title("Settings / Message Templates")[m
+[31m-    st.info([m
+[31m-        "Business settings and message templates are stored in the app's SQLite database. Business settings "[m
+[31m-        "supply the sender/reply-to details and template variables used by Quote Detail. "[m
+[31m-        "Saved templates affect a follow-up draft only when the operator selects that template in Quote Detail. "[m
+[31m-        "They do not change the public customer response page, optional AI drafts, or create automatic reminders."[m
+[31m-    )[m
+[31m-    settings = storage.get_business_settings()[m
+[31m-    with st.form("business_settings"):[m
+[31m-        business_name = st.text_input("Business name", settings["business_name"])[m
+[31m-        owner_email = st.text_input("Owner email", settings["owner_email"])[m
+[31m-        default_from_email = st.text_input("Default from email", settings["default_from_email"])[m
+[31m-        service_category = st.text_input("Service category", settings["service_category"])[m
+[31m-        brand_voice = st.text_area("Brand voice", settings["brand_voice"])[m
+[31m-        if st.form_submit_button("Save settings"):[m
+[31m-            storage.upsert_business_settings(business_name, owner_email, default_from_email, service_category, brand_voice)[m
+[31m-            st.success("Settings saved.")[m
+[31m-[m
+[31m-    st.subheader("Templates")[m
+[31m-    st.caption([m
+[31m-        "Each saved template controls the subject and body of an operator-generated email draft only when "[m
+[31m-        "that template is selected in Quote Detail. Saving or previewing a template does not send anything."[m
+[31m-    )[m
+[31m-    st.caption([m
+[31m-        "Supported placeholders: $customer_name, $business_name, $service_type, $quote_amount, "[m
+[31m-        "$response_link. Use $$ for a literal dollar sign. Unknown or missing placeholders remain visible."[m
+[31m-    )[m
+[31m-    templates = storage.list_message_templates()[m
+[31m-    selected_key = st.selectbox("Template", [t["template_key"] for t in templates] or ["first_follow_up"])[m
+[31m-    existing = next((t for t in templates if t["template_key"] == selected_key), {})[m
+[31m-    with st.form("template_form"):[m
+[31m-        template_key = st.text_input("Template key", existing.get("template_key", selected_key))[m
+[31m-        template_name = st.text_input("Template name", existing.get("template_name", "First Follow-Up"))[m
+[31m-        subject_template = st.text_input("Subject template", existing.get("subject_template", "Following up on your $service_type estimate"))[m
+[31m-        body_template = st.text_area("Body template", existing.get("body_template", "Hi $customer_name,\n\nChecking in from $business_name."))[m
+[31m-        if st.form_submit_button("Save template"):[m
+[31m-            storage.upsert_message_template(template_key, template_name, subject_template, body_template)[m
+[31m-            st.success("Template saved.")[m
+[31m-[m
+[31m-    sample = {[m
+[31m-        "customer_name": "Maya Chen",[m
+[31m-        "service_type": "Ceramic coating",[m
+[31m-        "quote_amount": "$1,295.00",[m
+[31m-        "response_link": "https://example.com?customer_response_token=sample",[m
+[31m-    }[m
+[31m-    st.subheader("Safe sample preview")[m
+[31m-    st.caption("Preview data: Maya Chen, ceramic coating, $1,295.00. No email is sent.")[m
+[31m-    try:[m
+[31m-        preview = render_saved_template([m
+[31m-            {"subject_template": subject_template, "body_template": body_template}, sample, settings[m
+[31m-        )[m
+[31m-    except (TypeError, ValueError):[m
+[31m-        st.warning("This template could not be previewed. Check placeholders beginning with '$'.")[m
+[31m-    else:[m
+[31m-        st.write(preview["subject"])[m
+[31m-        st.text(preview["body"])[m
+[31m-[m
+[31m-[m
+ PAGES = {[m
+     "Public Demo Home": public_home,[m
+     "Operator Login": login_page,[m
+[36m@@ -461,7 +400,6 @@[m [mPAGES = {[m
+     "Follow-Up Queue": follow_up_queue,[m
+     "Quote Detail": quote_detail,[m
+     "Customer Response": customer_response_link_page,[m
+[31m-    "Settings / Message Templates": settings_page,[m
+ }[m
+ [m
+ [m
+[1mdiff --git a/tests/test_customer_response_routing.py b/tests/test_customer_response_routing.py[m
+[1mindex 8df7c90..e99d551 100644[m
+[1m--- a/tests/test_customer_response_routing.py[m
+[1m+++ b/tests/test_customer_response_routing.py[m
+[36m@@ -34,6 +34,13 @@[m [mdef test_operator_customer_response_screen_is_only_link_management(tmp_path, mon[m
+     assert "missing a token" not in operator_source[m
+ [m
+ [m
+[32m+[m[32mdef test_settings_message_templates_is_not_operator_navigation(tmp_path, monkeypatch):[m
+[32m+[m[32m    app = load_app(tmp_path, monkeypatch)[m
+[32m+[m
+[32m+[m[32m    assert "Settings / Message Templates" not in app.PAGES[m
+[32m+[m[32m    assert not hasattr(app, "settings_page")[m
+[32m+[m
+[32m+[m
+ class SidebarStub:[m
+     def __init__(self):[m
+         self.radio_call = None[m
+[36m@@ -84,6 +91,18 @@[m [mdef test_invalid_session_page_resets_to_safe_default(tmp_path, monkeypatch):[m
+     assert rendered == ["Public Demo Home"][m
+ [m
+ [m
+[32m+[m[32mdef test_removed_settings_session_page_resets_to_safe_default(tmp_path, monkeypatch):[m
+[32m+[m[32m    app = load_app(tmp_path, monkeypatch)[m
+[32m+[m
+[32m+[m[32m    session_state, sidebar, rendered = run_operator_navigation([m
+[32m+[m[32m        app, monkeypatch, "Settings / Message Templates"[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m[32m    assert session_state["page"] == "Public Demo Home"[m
+[32m+[m[32m    assert "Settings / Message Templates" not in sidebar.radio_call[1][m
+[32m+[m[32m    assert rendered == ["Public Demo Home"][m
+[32m+[m
+[32m+[m
+ def test_legacy_public_page_query_does_not_crash_navigation(tmp_path, monkeypatch):[m
+     app = load_app(tmp_path, monkeypatch)[m
+ [m
