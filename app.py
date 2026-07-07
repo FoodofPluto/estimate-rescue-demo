@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
+import logging
 import re
 
 import streamlit as st
@@ -13,6 +14,8 @@ import storage
 from config import get_settings
 from leadloop_logic import STATUSES, follow_up_action
 from seed_data import seed_demo_data
+
+logger = logging.getLogger(__name__)
 
 COMPANY = "Blue Ridge Comfort Pros"
 POSITIONING = "LeadLoop Ops helps small home-service companies respond to every web lead quickly and follow up every open estimate so fewer jobs fall through the cracks."
@@ -60,6 +63,11 @@ MESSAGE_PURPOSE_OPTIONS = ["Check-in", "Estimate reminder", "Answer customer que
 MESSAGE_TONE_OPTIONS = ["Professional", "Friendly", "Brief", "Urgent"]
 
 st.set_page_config(page_title="LeadLoop Ops", layout="wide")
+logger.info(
+    "Storage module diagnostic: file=%s has_save_lead_action=%s",
+    getattr(storage, "__file__", "<missing>"),
+    hasattr(storage, "save_lead_action"),
+)
 storage.init_db()
 
 
