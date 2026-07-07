@@ -1,4 +1,4 @@
-"""SQLite storage layer for Estimate Rescue."""
+"""SQLite storage layer for LeadLoop Ops and its Estimate Rescue workflow."""
 
 from __future__ import annotations
 
@@ -130,6 +130,7 @@ def init_db() -> None:
                 no_further_follow_up INTEGER NOT NULL DEFAULT 0,
                 booked_value_estimate REAL,
                 outcome TEXT,
+                public_response_token TEXT,
                 last_event_at TEXT
             );
 
@@ -171,7 +172,18 @@ def init_db() -> None:
         lead_columns = {row["name"] for row in conn.execute("PRAGMA table_info(leads)").fetchall()}
         if "status_changed_at" not in lead_columns:
             conn.execute("ALTER TABLE leads ADD COLUMN status_changed_at TEXT")
+        if "public_response_token" not in lead_columns:
+            conn.execute("ALTER TABLE leads ADD COLUMN public_response_token TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_public_response_token ON leads(public_response_token)")
         conn.execute("UPDATE leads SET status_changed_at=created_at WHERE status_changed_at IS NULL")
+        tokenless_lead_ids = conn.execute(
+            "SELECT id FROM leads WHERE public_response_token IS NULL OR TRIM(public_response_token) = ''"
+        ).fetchall()
+        for row in tokenless_lead_ids:
+            conn.execute(
+                "UPDATE leads SET public_response_token=? WHERE id=?",
+                (uuid.uuid4().hex, row["id"]),
+            )
 
 
 def add_lead_event(lead_id: int, event_type: str, actor: str, message: str, metadata: str | None = None) -> int:
@@ -189,13 +201,14 @@ def create_lead(*, customer_name: str, email: str, phone: str, service_type: str
                 preferred_contact_method: str, description: str, source: str = "Website",
                 status: str = "New", created_at: str | None = None, assigned_to: str = "Office") -> int:
     stamp = created_at or now_iso()
+    token = uuid.uuid4().hex
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO leads (created_at,customer_name,email,phone,service_type,urgency,
             preferred_contact_method,description,source,status,assigned_to,next_follow_up_at,last_event_at,
-            status_changed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            status_changed_at,public_response_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (stamp, customer_name.strip(), email.strip(), phone.strip(), service_type, urgency,
-             preferred_contact_method, description.strip(), source, status, assigned_to, stamp, stamp, stamp),
+             preferred_contact_method, description.strip(), source, status, assigned_to, stamp, stamp, stamp, token),
         )
         lead_id = int(cur.lastrowid)
     acknowledgment = f"Thanks {customer_name.strip()}, Blue Ridge Comfort Pros received your request. Our office will follow up shortly."
@@ -224,6 +237,28 @@ def list_leads(status: str | None = None) -> list[dict[str, Any]]:
 def get_lead(lead_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def ensure_lead_response_token(lead_id: int) -> str | None:
+    """Return a lead's stable public response token, creating and persisting one if absent."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT public_response_token FROM leads WHERE id=?", (lead_id,)).fetchone()
+        if not row:
+            return None
+        token = str(row["public_response_token"] or "").strip()
+        if token:
+            return token
+        token = uuid.uuid4().hex
+        conn.execute("UPDATE leads SET public_response_token=? WHERE id=?", (token, lead_id))
+    return token
+
+
+def get_lead_by_token(token: str) -> dict[str, Any] | None:
+    if not token:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM leads WHERE public_response_token = ?", (token,)).fetchone()
     return _row_to_dict(row)
 
 
@@ -262,6 +297,36 @@ def update_lead(lead_id: int, *, actor: str = "Operator", **fields: Any) -> None
 
 def add_internal_note(lead_id: int, note: str) -> None:
     add_lead_event(lead_id, "internal_note", "Operator", note.strip())
+
+
+def status_for_lead_customer_response(response_type: str) -> str:
+    """Map public LeadLoop Ops response actions to operator lead statuses."""
+    status_map = {
+        "still_interested": "Follow-Up Due",
+        "need_more_time": "Not Ready",
+        "booked_elsewhere": "Lost",
+        "request_follow_up": "Follow-Up Due",
+    }
+    return status_map.get(response_type, "Follow-Up Due")
+
+
+def create_lead_customer_response(lead_id: int, response_type: str, response_notes: str = "") -> None:
+    lead = get_lead(lead_id)
+    if not lead:
+        raise ValueError("Lead not found")
+    status = status_for_lead_customer_response(response_type)
+    updates: dict[str, Any] = {"status": status}
+    if status == "Lost":
+        updates["outcome"] = "Lost"
+        updates["no_further_follow_up"] = 1
+    if response_type == "request_follow_up":
+        updates["next_follow_up_at"] = now_iso()
+    update_lead(lead_id, actor="Customer", **updates)
+    label = response_type.replace("_", " ")
+    message = f"Customer response: {label}."
+    if response_notes.strip():
+        message = f"{message} Notes: {response_notes.strip()}"
+    add_lead_event(lead_id, "customer_response", "Customer", message)
 
 
 def create_simulated_follow_up(lead_id: int, preview_text: str, channel: str = "email") -> int:

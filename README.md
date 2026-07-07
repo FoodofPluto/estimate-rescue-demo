@@ -19,7 +19,7 @@ Operator pages remain locked when `ADMIN_PASSWORD` is absent. The customer reque
 ## Demo flow
 
 1. Submit a request under **Customer Estimate Request**.
-2. Log in and open **Operator Dashboard**; the request appears with its next action.
+2. Log in and open **Follow-Up Dashboard**; the request appears with its next action.
 3. Open **Lead Detail** to assign it, change its status, add a note, or preview/simulate a follow-up.
 4. Review rule-based work in **Follow-Up Queue**.
 5. Show the results in **Weekly Summary**.
@@ -28,7 +28,7 @@ Use **Demo Controls → Reset and reseed demo data** for a clean walkthrough, or
 
 ## Messaging safety
 
-LeadLoop workflow messages are always recorded as `simulated`; no email or SMS leaves the app. The legacy optional Resend module remains in the repository for compatibility but is not called by the LeadLoop UI. No credentials are stored in source.
+LeadLoop Ops workflow messages are always recorded as `simulated`; no email or SMS leaves the app. Estimate Rescue is the estimate follow-up workflow inside LeadLoop Ops. The legacy optional Resend module remains in the repository for compatibility but is not called by the LeadLoop UI. No credentials are stored in source.
 
 ## Tests
 

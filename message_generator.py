@@ -1,4 +1,4 @@
-"""Follow-up message generation for Estimate Rescue."""
+"""Follow-up message generation for the Estimate Rescue workflow in LeadLoop Ops."""
 
 from __future__ import annotations
 
@@ -33,6 +33,15 @@ def response_link_for_quote(quote: dict[str, Any]) -> str:
     if quote.get("response_link"):
         return str(quote["response_link"])
     return ""
+
+
+def response_link_for_lead(lead: dict[str, Any]) -> str:
+    token = lead.get("public_response_token")
+    if not token:
+        return ""
+    base_url = get_settings().app_base_url.rstrip("/") if get_settings().app_base_url else ""
+    query = urlencode({CUSTOMER_RESPONSE_QUERY_PARAM: str(token)})
+    return f"{base_url}?{query}" if base_url else f"/?{query}"
 
 
 def public_response_token(query_params: Any) -> tuple[bool, str]:

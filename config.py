@@ -1,4 +1,4 @@
-"""Configuration helpers for Estimate Rescue."""
+"""Configuration helpers for LeadLoop Ops and its Estimate Rescue workflow."""
 
 from __future__ import annotations
 
