@@ -523,6 +523,18 @@ def generate_lead_follow_up_draft(
     )
 
 
+def followup_body_key(lead_id: int) -> str:
+    return f"followup_body_{lead_id}"
+
+
+def save_current_follow_up_draft(
+    lead_id: int,
+    body: str,
+    channel: str = "email",
+) -> int:
+    return storage.save_follow_up_draft(lead_id, body, channel)
+
+
 def render_message_history(messages: list[dict[str, object]], events: list[dict[str, object]]) -> None:
     rows = []
     for message in messages:
@@ -705,15 +717,29 @@ def lead_detail() -> None:
     st.caption("Demo mode: generated or saved drafts are logged here only. No email or SMS is sent automatically.")
     purpose = st.selectbox("Message purpose", MESSAGE_PURPOSE_OPTIONS, key=f"message_purpose_{lead_id}")
     tone = st.selectbox("Tone", MESSAGE_TONE_OPTIONS, key=f"message_tone_{lead_id}")
-    draft_key = f"message_draft_{lead_id}"
-    if draft_key not in st.session_state:
-        st.session_state[draft_key] = generate_lead_follow_up_draft(lead, purpose=purpose, tone=tone, customer_feedback=customer_feedback)
+    body_key = followup_body_key(lead_id)
+    if body_key not in st.session_state:
+        st.session_state[body_key] = generate_lead_follow_up_draft(
+            lead,
+            purpose=purpose,
+            tone=tone,
+            customer_feedback=customer_feedback,
+        )
     if st.button("Generate Follow-Up Draft", key=f"generate_draft_{lead_id}"):
-        st.session_state[draft_key] = generate_lead_follow_up_draft(lead, purpose=purpose, tone=tone, customer_feedback=customer_feedback)
-    edited_preview = st.text_area("Message body", st.session_state[draft_key], height=180, key=f"preview_{lead_id}")
+        generated_draft = generate_lead_follow_up_draft(
+            lead,
+            purpose=purpose,
+            tone=tone,
+            customer_feedback=customer_feedback,
+        )
+        if generated_draft == st.session_state.get(body_key):
+            st.info("Draft is already up to date for the selected purpose and tone.")
+        st.session_state[body_key] = generated_draft
+    st.text_area("Message body", height=180, key=body_key)
+    edited_preview = st.session_state[body_key]
     draft_cols = st.columns([1, 1])
     if draft_cols[0].button("Save Draft / Log Message", key=f"save_draft_{lead_id}", type="primary"):
-        storage.save_follow_up_draft(lead_id, edited_preview, str(lead["preferred_contact_method"] or "email").lower())
+        save_current_follow_up_draft(lead_id, edited_preview, str(lead["preferred_contact_method"] or "email").lower())
         st.success("Draft saved to message history. No external message was sent.")
         st.rerun()
     draft_cols[1].code(edited_preview, language="text")

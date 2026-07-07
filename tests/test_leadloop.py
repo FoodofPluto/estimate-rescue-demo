@@ -476,6 +476,53 @@ def test_customer_response_view_model_avoids_raw_dict_output(tmp_path, monkeypat
     assert "}" not in combined
 
 
+def test_follow_up_draft_generation_is_non_empty_and_varies(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "draft-generation.db"))
+    import app
+
+    lead = {
+        "customer_name": "Casey Martin",
+        "service_type": "heat pump replacement",
+        "booked_value_estimate": 4200,
+        "status": "Needs Follow-Up",
+        "next_action": "Call customer",
+    }
+
+    professional_check_in = app.generate_lead_follow_up_draft(lead, purpose="Check-in", tone="Professional")
+    friendly_check_in = app.generate_lead_follow_up_draft(lead, purpose="Check-in", tone="Friendly")
+    professional_booking = app.generate_lead_follow_up_draft(lead, purpose="Booking nudge", tone="Professional")
+
+    assert professional_check_in.strip()
+    assert friendly_check_in != professional_check_in
+    assert professional_booking != professional_check_in
+
+
+def test_follow_up_body_key_is_lead_scoped(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "draft-key.db"))
+    import app
+
+    assert app.followup_body_key(10) == "followup_body_10"
+    assert app.followup_body_key(11) != app.followup_body_key(10)
+
+
+def test_save_current_follow_up_draft_uses_edited_body(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "save-edited-draft.db"))
+    import app
+
+    saved = []
+
+    def fake_save_follow_up_draft(lead_id, preview_text, channel):
+        saved.append((lead_id, preview_text, channel))
+        return 123
+
+    monkeypatch.setattr(app.storage, "save_follow_up_draft", fake_save_follow_up_draft)
+
+    draft_id = app.save_current_follow_up_draft(7, "Operator edited this body.", "text")
+
+    assert draft_id == 123
+    assert saved == [(7, "Operator edited this body.", "text")]
+
+
 def test_lead_detail_selected_lead_state_remains_valid(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "valid-selected.db"))
     import app
