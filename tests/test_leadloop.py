@@ -184,6 +184,25 @@ def test_single_click_navigation_updates_page_and_reruns(tmp_path, monkeypatch):
     import app
 
     reruns = []
+    fake_streamlit = SimpleNamespace(
+        session_state={"page": "Customer Estimate Request", "nav_page": "Customer Estimate Request"},
+        rerun=lambda: reruns.append("rerun"),
+    )
+    monkeypatch.setattr(app, "st", fake_streamlit)
+
+    changed = app.apply_page_selection("Lead Detail", "Customer Estimate Request")
+
+    assert changed is True
+    assert fake_streamlit.session_state["page"] == "Lead Detail"
+    assert fake_streamlit.session_state["nav_page"] == "Customer Estimate Request"
+    assert reruns == ["rerun"]
+
+
+def test_apply_page_selection_does_not_create_nav_widget_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "navigation-no-widget-write.db"))
+    import app
+
+    reruns = []
     fake_streamlit = SimpleNamespace(session_state={"page": "Customer Estimate Request"}, rerun=lambda: reruns.append("rerun"))
     monkeypatch.setattr(app, "st", fake_streamlit)
 
@@ -191,7 +210,7 @@ def test_single_click_navigation_updates_page_and_reruns(tmp_path, monkeypatch):
 
     assert changed is True
     assert fake_streamlit.session_state["page"] == "Lead Detail"
-    assert fake_streamlit.session_state["nav_page"] == "Lead Detail"
+    assert "nav_page" not in fake_streamlit.session_state
     assert reruns == ["rerun"]
 
 
@@ -239,8 +258,53 @@ def test_dashboard_view_action_routes_to_lead_detail(tmp_path, monkeypatch):
 
     assert fake_streamlit.session_state["selected_lead_id"] == 42
     assert fake_streamlit.session_state["page"] == "Lead Detail"
-    assert fake_streamlit.session_state["nav_page"] == "Lead Detail"
+    assert fake_streamlit.session_state["pending_nav_page"] == "Lead Detail"
+    assert "nav_page" not in fake_streamlit.session_state
     assert reruns == ["rerun"]
+
+
+def test_pending_lead_detail_navigation_syncs_nav_before_sidebar_widget(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "pending-nav.db"))
+    import app
+
+    calls = []
+    rendered = []
+
+    class Sidebar:
+        def title(self, message):
+            calls.append(("title", message))
+
+        def caption(self, message):
+            calls.append(("caption", message))
+
+        def button(self, label):
+            return False
+
+        def radio(self, label, options, index, key):
+            calls.append(("radio", label, options[index], key))
+            assert key == "nav_page"
+            assert options[index] == "Lead Detail"
+            assert fake_streamlit.session_state["nav_page"] == "Lead Detail"
+            return fake_streamlit.session_state[key]
+
+    fake_streamlit = SimpleNamespace(
+        query_params={},
+        session_state={
+            "page": "Lead Detail",
+            "pending_nav_page": "Lead Detail",
+            "nav_page": "Follow-Up Dashboard",
+        },
+        sidebar=Sidebar(),
+    )
+    monkeypatch.setattr(app, "st", fake_streamlit)
+    monkeypatch.setitem(app.PAGES, "Lead Detail", lambda: rendered.append("lead-detail"))
+
+    app.main()
+
+    assert fake_streamlit.session_state["page"] == "Lead Detail"
+    assert "pending_nav_page" not in fake_streamlit.session_state
+    assert calls[-1] == ("radio", "Navigation", "Lead Detail", "nav_page")
+    assert rendered == ["lead-detail"]
 
 
 def test_lead_action_context_includes_customer_contact_and_activity(tmp_path, monkeypatch):

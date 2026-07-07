@@ -271,7 +271,7 @@ def lead_detail_sections(lead: dict[str, object], response_link: str) -> dict[st
 def route_to_lead_detail(lead_id: int) -> None:
     st.session_state["selected_lead_id"] = lead_id
     st.session_state["page"] = "Lead Detail"
-    st.session_state["nav_page"] = "Lead Detail"
+    st.session_state["pending_nav_page"] = "Lead Detail"
     st.rerun()
 
 
@@ -592,9 +592,23 @@ def apply_page_selection(selected_page: str, current_page: str) -> bool:
     if selected_page == current_page:
         return False
     st.session_state["page"] = selected_page
-    st.session_state["nav_page"] = selected_page
     st.rerun()
     return True
+
+
+def prepare_sidebar_navigation(page_names: list[str]) -> str:
+    """Return the canonical page and prepare nav_page before its widget exists."""
+    current = safe_page_name(st.session_state.get("page"))
+    pending_page = st.session_state.pop("pending_nav_page", None)
+    if pending_page is not None:
+        current = safe_page_name(pending_page)
+        st.session_state["nav_page"] = current
+    elif "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = current
+    elif st.session_state["nav_page"] not in page_names:
+        st.session_state["nav_page"] = current
+    st.session_state["page"] = current
+    return current
 
 
 def main() -> None:
@@ -608,8 +622,7 @@ def main() -> None:
         st.session_state.clear()
         st.rerun()
     page_names = list(PAGES)
-    current = safe_page_name(st.session_state.get("page"))
-    st.session_state["page"] = current
+    current = prepare_sidebar_navigation(page_names)
     page = st.sidebar.radio("Navigation", page_names, index=page_names.index(current), key="nav_page")
     apply_page_selection(page, current)
     PAGES[page]()
