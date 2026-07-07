@@ -129,6 +129,10 @@ def init_db() -> None:
                 opted_out INTEGER NOT NULL DEFAULT 0,
                 no_further_follow_up INTEGER NOT NULL DEFAULT 0,
                 booked_value_estimate REAL,
+                estimate_status TEXT DEFAULT 'Draft',
+                estimate_note TEXT,
+                next_action TEXT,
+                operator_note TEXT,
                 outcome TEXT,
                 public_response_token TEXT,
                 last_event_at TEXT
@@ -174,8 +178,12 @@ def init_db() -> None:
             conn.execute("ALTER TABLE leads ADD COLUMN status_changed_at TEXT")
         if "public_response_token" not in lead_columns:
             conn.execute("ALTER TABLE leads ADD COLUMN public_response_token TEXT")
+        for column in ("estimate_status", "estimate_note", "next_action", "operator_note"):
+            if column not in lead_columns:
+                conn.execute(f"ALTER TABLE leads ADD COLUMN {column} TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_public_response_token ON leads(public_response_token)")
         conn.execute("UPDATE leads SET status_changed_at=created_at WHERE status_changed_at IS NULL")
+        conn.execute("UPDATE leads SET estimate_status='Draft' WHERE estimate_status IS NULL OR TRIM(estimate_status) = ''")
         tokenless_lead_ids = conn.execute(
             "SELECT id FROM leads WHERE public_response_token IS NULL OR TRIM(public_response_token) = ''"
         ).fetchall()
@@ -206,9 +214,9 @@ def create_lead(*, customer_name: str, email: str, phone: str, service_type: str
         cur = conn.execute(
             """INSERT INTO leads (created_at,customer_name,email,phone,service_type,urgency,
             preferred_contact_method,description,source,status,assigned_to,next_follow_up_at,last_event_at,
-            status_changed_at,public_response_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            status_changed_at,public_response_token,estimate_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (stamp, customer_name.strip(), email.strip(), phone.strip(), service_type, urgency,
-             preferred_contact_method, description.strip(), source, status, assigned_to, stamp, stamp, stamp, token),
+             preferred_contact_method, description.strip(), source, status, assigned_to, stamp, stamp, stamp, token, "Draft"),
         )
         lead_id = int(cur.lastrowid)
     acknowledgment = f"Thanks {customer_name.strip()}, Blue Ridge Comfort Pros received your request. Our office will follow up shortly."
@@ -276,7 +284,8 @@ def list_lead_messages(lead_id: int) -> list[dict[str, Any]]:
 
 def update_lead(lead_id: int, *, actor: str = "Operator", **fields: Any) -> None:
     allowed = {"status", "assigned_to", "next_follow_up_at", "follow_up_stage", "paused",
-               "booked_value_estimate", "outcome", "no_further_follow_up"}
+               "booked_value_estimate", "outcome", "no_further_follow_up", "next_action",
+               "operator_note", "estimate_status", "estimate_note", "service_type", "description"}
     updates = {key: value for key, value in fields.items() if key in allowed}
     current = get_lead(lead_id)
     if not current:
@@ -293,6 +302,62 @@ def update_lead(lead_id: int, *, actor: str = "Operator", **fields: Any) -> None
         conn.execute(f"UPDATE leads SET {clause} WHERE id=?", (*updates.values(), lead_id))
     summary = ", ".join(f"{key.replace('_', ' ')}: {value}" for key, value in updates.items())
     add_lead_event(lead_id, "lead_updated", actor, summary)
+
+
+def save_lead_action(
+    lead_id: int,
+    *,
+    status: str,
+    next_action: str,
+    follow_up_at: str | None,
+    operator_note: str = "",
+    actor: str = "Operator",
+) -> None:
+    """Persist the operator-facing lead status/action panel in one audit event."""
+    paused = 1 if status == "Paused" or next_action == "Pause follow-up" else 0
+    no_further = 1 if next_action == "No further action" or status in {"Booked", "Lost", "Paused"} else 0
+    outcome = status if status in {"Booked", "Lost", "Paused"} else None
+    update_lead(
+        lead_id,
+        actor=actor,
+        status=status,
+        next_action=next_action,
+        next_follow_up_at=follow_up_at,
+        operator_note=operator_note.strip(),
+        paused=paused,
+        no_further_follow_up=no_further,
+        outcome=outcome,
+    )
+    add_lead_event(
+        lead_id,
+        "lead_action_saved",
+        actor,
+        f"Status set to {status}; next action set to {next_action}."
+        + (f" Note: {operator_note.strip()}" if operator_note.strip() else ""),
+    )
+
+
+def update_lead_estimate(
+    lead_id: int,
+    *,
+    amount: float | None,
+    title: str,
+    summary: str,
+    estimate_status: str,
+    estimate_note: str = "",
+    actor: str = "Operator",
+) -> None:
+    """Persist editable estimate fields stored on a LeadLoop lead."""
+    update_lead(
+        lead_id,
+        actor=actor,
+        booked_value_estimate=amount,
+        service_type=title.strip(),
+        description=summary.strip(),
+        estimate_status=estimate_status,
+        estimate_note=estimate_note.strip(),
+    )
+    add_lead_event(lead_id, "estimate_edited", actor, f"Estimate edited; status set to {estimate_status}.")
 
 
 def add_internal_note(lead_id: int, note: str) -> None:
@@ -326,7 +391,7 @@ def create_lead_customer_response(lead_id: int, response_type: str, response_not
     message = f"Customer response: {label}."
     if response_notes.strip():
         message = f"{message} Notes: {response_notes.strip()}"
-    add_lead_event(lead_id, "customer_response", "Customer", message)
+    add_lead_event(lead_id, "customer_response", "Customer", message, f"response_type={response_type}")
 
 
 def create_simulated_follow_up(lead_id: int, preview_text: str, channel: str = "email") -> int:
@@ -344,6 +409,18 @@ def create_simulated_follow_up(lead_id: int, preview_text: str, channel: str = "
     else:
         stage = max(int(lead.get("follow_up_stage") or 0), completed_stage(action))
         update_lead(lead_id, follow_up_stage=stage)
+    return int(cur.lastrowid)
+
+
+def save_follow_up_draft(lead_id: int, preview_text: str, channel: str = "email", template_name: str = "follow_up_draft") -> int:
+    lead = get_lead(lead_id)
+    if not lead:
+        raise ValueError("Lead not found")
+    stamp = now_iso()
+    with get_connection() as conn:
+        cur = conn.execute("""INSERT INTO messages (lead_id,scheduled_at,sent_at,channel,template_name,status,preview_text)
+            VALUES (?,?,?,?,?,?,?)""", (lead_id, stamp, None, channel, template_name, "draft", preview_text))
+    add_lead_event(lead_id, "message_draft_saved", "Operator", "Follow-up draft saved in Demo Mode. No message was sent.")
     return int(cur.lastrowid)
 
 

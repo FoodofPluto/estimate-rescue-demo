@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Any
 
-STATUSES = ["New", "Contacted", "Estimate Sent", "Follow-Up Due", "Booked", "Lost", "Not Ready", "Paused"]
+STATUSES = ["New", "Contacted", "Estimate Sent", "Follow-Up Due", "Needs Follow-Up", "Followed Up", "Booked", "Lost", "Not Ready", "Paused"]
 STOP_STATUSES = {"Booked", "Lost", "Paused"}
 
 
@@ -31,7 +31,7 @@ def follow_up_action(lead: dict[str, Any], today: date | None = None) -> str | N
     stage = int(lead.get("follow_up_stage") or 0)
     if status == "New":
         return "Office should respond"
-    if status in {"Estimate Sent", "Follow-Up Due", "Not Ready"}:
+    if status in {"Estimate Sent", "Follow-Up Due", "Needs Follow-Up", "Not Ready"}:
         if age >= 10 and stage < 3:
             return "Final check-in due"
         if age >= 5 and stage < 2:

@@ -66,6 +66,25 @@ def test_follow_up_stages_and_terminal_exclusions(tmp_path):
     assert storage.list_follow_up_leads() == []
 
 
+def test_no_further_follow_up_is_excluded_from_queue(tmp_path):
+    storage = load_storage(tmp_path)
+    old = (datetime.now(UTC) - timedelta(days=6)).isoformat()
+    lead_id = make_lead(storage, status="Needs Follow-Up", created_at=old)
+
+    assert follow_up_action(storage.get_lead(lead_id), date.today()) == "Follow-up 2 due"
+
+    storage.save_lead_action(
+        lead_id,
+        status="Needs Follow-Up",
+        next_action="No further action",
+        follow_up_at=None,
+        operator_note="Customer asked us to stop checking in for now.",
+    )
+
+    assert storage.get_lead(lead_id)["no_further_follow_up"] == 1
+    assert storage.list_follow_up_leads() == []
+
+
 def test_status_update_and_seed_are_idempotent(tmp_path):
     storage = load_storage(tmp_path)
     lead_id = make_lead(storage)
@@ -146,15 +165,9 @@ def test_dashboard_action_labels_are_contractor_friendly(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "labels.db"))
     import app
 
-    assert app.DASHBOARD_ACTION_LABELS == {
-        "view": "View/Edit Lead",
-        "followed_up": "Mark Followed Up",
-        "booked": "Mark Booked",
-        "lost": "Mark Lost",
-        "pause": "Pause Follow-Up",
-        "schedule": "Schedule Follow-Up",
-        "open_response": "Open Response Link",
-    }
+    assert app.DASHBOARD_ACTION_LABELS == {"view": "View/Edit Lead", "open_response": "Open Response Link"}
+    assert "Mark as booked" in app.LEAD_ACTION_OPTIONS
+    assert "No further action" in app.LEAD_ACTION_OPTIONS
 
 
 def test_empty_state_helpers_tell_operator_how_to_populate_demo(tmp_path, monkeypatch):
@@ -259,6 +272,7 @@ def test_dashboard_view_action_routes_to_lead_detail(tmp_path, monkeypatch):
     assert fake_streamlit.session_state["selected_lead_id"] == 42
     assert fake_streamlit.session_state["page"] == "Lead Detail"
     assert fake_streamlit.session_state["pending_nav_page"] == "Lead Detail"
+    assert fake_streamlit.session_state["scroll_to_top_lead_detail"] is True
     assert "nav_page" not in fake_streamlit.session_state
     assert reruns == ["rerun"]
 
@@ -330,7 +344,7 @@ def test_lead_action_context_includes_customer_contact_and_activity(tmp_path, mo
     assert context["Phone"] == "555-0188"
     assert context["Estimate amount"] == "$4,200"
     assert context["Current status"] == "Estimate Sent"
-    assert context["Last follow-up"] == "2026-07-06T12:00:00+00:00"
+    assert context["Last follow-up"] == "Jul 6, 2026 · 12:00 PM"
     assert "need more time" in context["Most recent customer response or activity"]
     assert context["Public response link"].endswith("abc")
 
@@ -363,8 +377,93 @@ def test_lead_detail_sections_preserve_key_fields(tmp_path, monkeypatch):
     assert sections["contact"]["Phone"] == "555-0199"
     assert sections["opportunity"]["Service type"] == "Heat pump replacement"
     assert sections["opportunity"]["Notes"] == "Customer wants a replacement estimate."
-    assert sections["follow_up"]["Next follow-up"] == "2026-07-10T00:00:00+00:00"
+    assert sections["follow_up"]["Next follow-up"] == "Jul 10, 2026 · 12:00 AM"
     assert sections["follow_up"]["Public response link"].endswith("def")
+
+
+def test_timestamp_formatting_supports_default_and_24_hour(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "timestamps.db"))
+    import app
+
+    assert app.format_timestamp("2026-07-07T14:35:00+00:00") == "Jul 7, 2026 · 2:35 PM"
+    assert app.format_timestamp("2026-07-07T14:35:00+00:00", use_24_hour=True) == "Jul 7, 2026 · 14:35"
+    assert app.format_timestamp(None) == "Not recorded"
+
+
+def test_status_action_persistence_and_audit_event(tmp_path):
+    storage = load_storage(tmp_path)
+    lead_id = make_lead(storage, status="New")
+
+    storage.save_lead_action(
+        lead_id,
+        status="Booked",
+        next_action="Mark as booked",
+        follow_up_at="2026-07-08T15:30:00+00:00",
+        operator_note="Customer confirmed morning install.",
+    )
+
+    lead = storage.get_lead(lead_id)
+    events = storage.list_lead_events(lead_id)
+    assert lead["status"] == "Booked"
+    assert lead["next_action"] == "Mark as booked"
+    assert lead["operator_note"] == "Customer confirmed morning install."
+    assert lead["next_follow_up_at"] == "2026-07-08T15:30:00+00:00"
+    assert any(event["event_type"] == "lead_action_saved" for event in events)
+
+
+def test_estimate_editing_persistence_and_audit_event(tmp_path):
+    storage = load_storage(tmp_path)
+    lead_id = make_lead(storage)
+
+    storage.update_lead_estimate(
+        lead_id,
+        amount=4250,
+        title="Heat pump replacement",
+        summary="Replace outdoor unit and thermostat.",
+        estimate_status="Revised",
+        estimate_note="Includes updated equipment option.",
+    )
+
+    lead = storage.get_lead(lead_id)
+    events = storage.list_lead_events(lead_id)
+    assert lead["booked_value_estimate"] == 4250
+    assert lead["service_type"] == "Heat pump replacement"
+    assert lead["description"] == "Replace outdoor unit and thermostat."
+    assert lead["estimate_status"] == "Revised"
+    assert lead["estimate_note"] == "Includes updated equipment option."
+    assert any(event["event_type"] == "estimate_edited" for event in events)
+
+
+def test_customer_response_view_model_avoids_raw_dict_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "customer-response-format.db"))
+    import app
+
+    response = app.customer_response_view_model([
+        {
+            "event_type": "customer_response",
+            "timestamp": "2026-07-07T14:35:00+00:00",
+            "message": "Customer response: request follow up. Notes: Can you call Friday?",
+            "metadata": "response_type=request_follow_up",
+        }
+    ])
+
+    combined = " ".join(response.values())
+    assert response["response_type"] == "Request Follow Up"
+    assert response["message"] == "Can you call Friday?"
+    assert response["submitted_at"] == "Jul 7, 2026 · 2:35 PM"
+    assert "{" not in combined
+    assert "}" not in combined
+
+
+def test_lead_detail_selected_lead_state_remains_valid(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "valid-selected.db"))
+    import app
+
+    leads = [{"id": 10}, {"id": 11}]
+
+    assert app.valid_selected_lead_id(leads, 11) == 11
+    assert app.valid_selected_lead_id(leads, 99) == 10
+    assert app.valid_selected_lead_id([], 99) is None
 
 
 def test_public_customer_response_token_bypasses_operator_navigation(tmp_path, monkeypatch):
