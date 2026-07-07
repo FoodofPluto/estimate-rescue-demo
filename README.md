@@ -42,3 +42,5 @@ SQLite is appropriate for this portfolio demo, not multi-user production deploym
 ## Intentionally out of scope
 
 LeadLoop Ops is a managed lead-response and estimate-follow-up workflow, not a full CRM or autonomous messaging platform. Real outbound messaging, CRM synchronization, billing, multi-tenancy, and production-grade authentication are intentionally excluded from this sales demo.
+
+Redeploy trigger.
