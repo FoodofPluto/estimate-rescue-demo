@@ -1,6 +1,8 @@
+import ast
 from datetime import UTC, date, datetime, timedelta
 import importlib
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from leadloop_logic import follow_up_action
@@ -12,6 +14,22 @@ def load_storage(tmp_path):
     importlib.reload(storage)
     storage.init_db()
     return storage
+
+
+def test_app_storage_references_exist():
+    import storage
+
+    app_source = Path(__file__).resolve().parents[1] / "app.py"
+    tree = ast.parse(app_source.read_text(encoding="utf-8"))
+    referenced = {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "storage"
+    }
+    missing = sorted(name for name in referenced if not hasattr(storage, name))
+    assert missing == []
 
 
 def make_lead(storage, **overrides):
@@ -408,7 +426,10 @@ def test_status_action_persistence_and_audit_event(tmp_path):
     assert lead["next_action"] == "Mark as booked"
     assert lead["operator_note"] == "Customer confirmed morning install."
     assert lead["next_follow_up_at"] == "2026-07-08T15:30:00+00:00"
-    assert any(event["event_type"] == "lead_action_saved" for event in events)
+    action_events = [event for event in events if event["event_type"] == "lead_action_saved"]
+    assert action_events
+    assert "Status set to Booked" in action_events[-1]["message"]
+    assert "next action set to Mark as booked" in action_events[-1]["message"]
 
 
 def test_estimate_editing_persistence_and_audit_event(tmp_path):
