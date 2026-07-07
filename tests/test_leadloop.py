@@ -191,6 +191,7 @@ def test_single_click_navigation_updates_page_and_reruns(tmp_path, monkeypatch):
 
     assert changed is True
     assert fake_streamlit.session_state["page"] == "Lead Detail"
+    assert fake_streamlit.session_state["nav_page"] == "Lead Detail"
     assert reruns == ["rerun"]
 
 
@@ -238,7 +239,68 @@ def test_dashboard_view_action_routes_to_lead_detail(tmp_path, monkeypatch):
 
     assert fake_streamlit.session_state["selected_lead_id"] == 42
     assert fake_streamlit.session_state["page"] == "Lead Detail"
+    assert fake_streamlit.session_state["nav_page"] == "Lead Detail"
     assert reruns == ["rerun"]
+
+
+def test_lead_action_context_includes_customer_contact_and_activity(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "action-context.db"))
+    import app
+
+    context = app.lead_action_context(
+        {
+            "customer_name": "Casey Martin",
+            "email": "casey@example.com",
+            "phone": "555-0188",
+            "booked_value_estimate": 4200,
+            "status": "Estimate Sent",
+            "next_follow_up_at": "2026-07-09T00:00:00+00:00",
+        },
+        "https://demo.example/?customer_response_token=abc",
+        [{"event_type": "customer_response", "timestamp": "2026-07-07T12:00:00+00:00", "message": "Customer response: need more time."}],
+        [{"template_name": "estimate_follow_up", "sent_at": "2026-07-06T12:00:00+00:00"}],
+    )
+
+    assert context["Customer"] == "Casey Martin"
+    assert context["Email"] == "casey@example.com"
+    assert context["Phone"] == "555-0188"
+    assert context["Estimate amount"] == "$4,200"
+    assert context["Current status"] == "Estimate Sent"
+    assert context["Last follow-up"] == "2026-07-06T12:00:00+00:00"
+    assert "need more time" in context["Most recent customer response or activity"]
+    assert context["Public response link"].endswith("abc")
+
+
+def test_lead_detail_sections_preserve_key_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "detail-sections.db"))
+    import app
+
+    sections = app.lead_detail_sections(
+        {
+            "customer_name": "Jordan Smith",
+            "email": "jordan@example.com",
+            "phone": "555-0199",
+            "preferred_contact_method": "Text",
+            "source": "Website",
+            "booked_value_estimate": 9800,
+            "service_type": "Heat pump replacement",
+            "status": "Follow-Up Due",
+            "urgency": "Soon",
+            "assigned_to": "Office",
+            "description": "Customer wants a replacement estimate.",
+            "next_follow_up_at": "2026-07-10T00:00:00+00:00",
+        },
+        "https://demo.example/?customer_response_token=def",
+    )
+
+    assert sections["header"]["Customer"] == "Jordan Smith"
+    assert sections["header"]["Status"] == "Follow-Up Due"
+    assert sections["contact"]["Email"] == "jordan@example.com"
+    assert sections["contact"]["Phone"] == "555-0199"
+    assert sections["opportunity"]["Service type"] == "Heat pump replacement"
+    assert sections["opportunity"]["Notes"] == "Customer wants a replacement estimate."
+    assert sections["follow_up"]["Next follow-up"] == "2026-07-10T00:00:00+00:00"
+    assert sections["follow_up"]["Public response link"].endswith("def")
 
 
 def test_public_customer_response_token_bypasses_operator_navigation(tmp_path, monkeypatch):

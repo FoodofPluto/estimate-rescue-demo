@@ -181,9 +181,97 @@ def next_follow_up_date_value(lead: dict[str, object]) -> date:
     return datetime.now(UTC).date()
 
 
+def display_value(value: object, fallback: str = "Not provided") -> str:
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def money_value(value: object) -> str:
+    if value in (None, ""):
+        return "Not estimated"
+    try:
+        return f"${float(value):,.0f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def lead_event_summary(event: dict[str, object] | None) -> str:
+    if not event:
+        return "No recent activity"
+    timestamp = display_value(event.get("timestamp"), "")
+    message = display_value(event.get("message"), "")
+    return f"{timestamp} - {message}" if timestamp else message
+
+
+def latest_lead_event(events: list[dict[str, object]], event_type: str | None = None) -> dict[str, object] | None:
+    for event in events:
+        if event_type is None or event.get("event_type") == event_type:
+            return event
+    return None
+
+
+def latest_follow_up(messages: list[dict[str, object]], events: list[dict[str, object]]) -> str:
+    for message in messages:
+        if message.get("template_name") == "estimate_follow_up":
+            return display_value(message.get("sent_at") or message.get("scheduled_at"), "Recorded")
+    return lead_event_summary(latest_lead_event(events, "follow_up_completed"))
+
+
+def lead_action_context(
+    lead: dict[str, object],
+    response_link: str,
+    events: list[dict[str, object]] | None = None,
+    messages: list[dict[str, object]] | None = None,
+) -> dict[str, str]:
+    events = events or []
+    messages = messages or []
+    recent_customer_response = latest_lead_event(events, "customer_response")
+    recent_activity = recent_customer_response or latest_lead_event(events)
+    return {
+        "Customer": display_value(lead.get("customer_name")),
+        "Email": display_value(lead.get("email")),
+        "Phone": display_value(lead.get("phone")),
+        "Estimate amount": money_value(lead.get("booked_value_estimate")),
+        "Current status": display_value(lead.get("status")),
+        "Last follow-up": latest_follow_up(messages, events),
+        "Next follow-up": display_value(lead.get("next_follow_up_at"), "Not scheduled"),
+        "Most recent customer response or activity": lead_event_summary(recent_activity),
+        "Public response link": response_link,
+    }
+
+
+def lead_detail_sections(lead: dict[str, object], response_link: str) -> dict[str, dict[str, str]]:
+    return {
+        "header": {
+            "Customer": display_value(lead.get("customer_name")),
+            "Status": display_value(lead.get("status")),
+            "Estimate amount": money_value(lead.get("booked_value_estimate")),
+        },
+        "contact": {
+            "Email": display_value(lead.get("email")),
+            "Phone": display_value(lead.get("phone")),
+            "Preferred contact": display_value(lead.get("preferred_contact_method")),
+            "Source": display_value(lead.get("source")),
+        },
+        "opportunity": {
+            "Estimate amount": money_value(lead.get("booked_value_estimate")),
+            "Service type": display_value(lead.get("service_type")),
+            "Status": display_value(lead.get("status")),
+            "Urgency": display_value(lead.get("urgency")),
+            "Assigned": display_value(lead.get("assigned_to"), "Unassigned"),
+            "Notes": display_value(lead.get("description"), "No notes"),
+        },
+        "follow_up": {
+            "Next follow-up": display_value(lead.get("next_follow_up_at"), "Not scheduled"),
+            "Public response link": response_link,
+        },
+    }
+
+
 def route_to_lead_detail(lead_id: int) -> None:
     st.session_state["selected_lead_id"] = lead_id
     st.session_state["page"] = "Lead Detail"
+    st.session_state["nav_page"] = "Lead Detail"
     st.rerun()
 
 
@@ -244,12 +332,28 @@ def dashboard() -> None:
     for lead in leads:
         action = follow_up_action(lead) or "No action due"
         with st.expander(f"{lead['customer_name']} - {lead['service_type']} - {lead['status']}"):
-            st.caption(f"{action} - {lead['email']} - {lead['phone']}")
-            st.write(lead["description"])
-            st.caption("Public response link")
             response_link = lead_response_link(lead)
-            st.code(response_link, language="text")
-            st.link_button(DASHBOARD_ACTION_LABELS["open_response"], response_link)
+            context = lead_action_context(
+                lead,
+                response_link,
+                storage.list_lead_events(int(lead["id"])),
+                storage.list_lead_messages(int(lead["id"])),
+            )
+            top_left, top_mid, top_right = st.columns([1.2, 1.1, 1])
+            top_left.markdown(f"**{context['Customer']}**")
+            top_left.caption(f"{context['Email']} | {context['Phone']}")
+            top_mid.metric("Estimate", context["Estimate amount"])
+            top_mid.caption(f"Status: {context['Current status']}")
+            top_right.caption(f"Action: {action}")
+            top_right.caption(f"Next: {context['Next follow-up']}")
+
+            detail_left, detail_right = st.columns([1.4, 1])
+            detail_left.write(lead["description"])
+            detail_left.caption(f"Last follow-up: {context['Last follow-up']}")
+            detail_left.caption(f"Recent: {context['Most recent customer response or activity']}")
+            detail_right.caption("Public response link")
+            detail_right.code(context["Public response link"], language="text")
+            detail_right.link_button(DASHBOARD_ACTION_LABELS["open_response"], context["Public response link"])
             scheduled_date = next_follow_up_date_value(lead)
             cols = st.columns([1, 1, 1, 1, 1, 1.2])
             if cols[0].button(DASHBOARD_ACTION_LABELS["view"], key=f"view_{lead['id']}", type="primary"):
@@ -287,29 +391,38 @@ def lead_detail() -> None:
     lead_id = st.selectbox("Lead", ids, index=ids.index(selected), format_func=lambda i: next(x["customer_name"] for x in leads if x["id"] == i))
     st.session_state["selected_lead_id"] = lead_id
     lead = storage.get_lead(lead_id)
-    st.subheader(f"{lead['customer_name']} - {lead['service_type']}")
-    st.caption("Edit the customer, estimate status, next follow-up, response link, and activity history for this LeadLoop Ops opportunity.")
-    a, b, c, d = st.columns(4)
-    a.metric("Status", lead["status"])
-    b.metric("Urgency", lead["urgency"])
-    c.metric("Assigned", lead["assigned_to"] or "Unassigned")
-    d.metric("Age", age_label(lead["created_at"]))
-    st.subheader("Customer information")
-    st.write(f"Name: {lead['customer_name']}")
-    st.write(f"Email: {lead['email']}")
-    st.write(f"Phone: {lead['phone']}")
-    st.write(f"Preferred contact: {lead['preferred_contact_method']}")
-    st.subheader("Estimate / opportunity information")
-    st.write(f"Service: {lead['service_type']}")
-    st.write(f"Source: {lead['source']}")
-    st.write(f"Description: {lead['description']}")
-    st.write(f"Next follow-up: {lead['next_follow_up_at'] or 'Not scheduled'}")
-    st.subheader("Public response link")
-    st.caption("Use this simulated link when demonstrating how a customer can re-engage with the estimate follow-up workflow.")
     response_link = lead_response_link(lead)
-    st.code(response_link, language="text")
-    st.link_button(DASHBOARD_ACTION_LABELS["open_response"], response_link)
-    st.subheader("Edit lead and follow-up")
+    sections = lead_detail_sections(lead, response_link)
+
+    header = sections["header"]
+    st.subheader(header["Customer"])
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("Status", header["Status"])
+    h2.metric("Estimate", header["Estimate amount"])
+    h3.metric("Urgency", sections["opportunity"]["Urgency"])
+    h4.metric("Age", age_label(lead["created_at"]))
+
+    contact, opportunity = st.columns([1, 1.4])
+    with contact:
+        st.subheader("Contact")
+        st.write(f"Email: {sections['contact']['Email']}")
+        st.write(f"Phone: {sections['contact']['Phone']}")
+        st.write(f"Preferred contact: {sections['contact']['Preferred contact']}")
+        st.write(f"Source: {sections['contact']['Source']}")
+    with opportunity:
+        st.subheader("Estimate / opportunity")
+        st.write(f"Service type: {sections['opportunity']['Service type']}")
+        st.write(f"Status: {sections['opportunity']['Status']}")
+        st.write(f"Assigned: {sections['opportunity']['Assigned']}")
+        st.write(f"Notes: {sections['opportunity']['Notes']}")
+
+    st.subheader("Follow-up")
+    f1, f2 = st.columns([1, 1.4])
+    f1.write(f"Next follow-up: {sections['follow_up']['Next follow-up']}")
+    f2.caption("Public response link")
+    f2.code(sections["follow_up"]["Public response link"], language="text")
+    f2.link_button(DASHBOARD_ACTION_LABELS["open_response"], sections["follow_up"]["Public response link"])
+
     with st.form("lead_update"):
         c1, c2 = st.columns(2)
         status = c1.selectbox("Status", STATUSES, index=STATUSES.index(lead["status"]))
@@ -341,10 +454,14 @@ def lead_detail() -> None:
         st.rerun()
     if action:
         st.warning(f"Current action: {action}")
-    st.subheader("Message history")
-    st.dataframe(storage.list_lead_messages(lead_id), use_container_width=True, hide_index=True)
-    st.subheader("Audit trail")
-    st.dataframe(storage.list_lead_events(lead_id), use_container_width=True, hide_index=True)
+    st.subheader("Activity")
+    messages, events = st.columns(2)
+    with messages:
+        st.caption("Message history")
+        st.dataframe(storage.list_lead_messages(lead_id), use_container_width=True, hide_index=True)
+    with events:
+        st.caption("Audit trail")
+        st.dataframe(storage.list_lead_events(lead_id), use_container_width=True, hide_index=True)
 
 
 def follow_up_queue() -> None:
@@ -475,6 +592,7 @@ def apply_page_selection(selected_page: str, current_page: str) -> bool:
     if selected_page == current_page:
         return False
     st.session_state["page"] = selected_page
+    st.session_state["nav_page"] = selected_page
     st.rerun()
     return True
 
